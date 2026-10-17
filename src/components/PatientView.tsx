@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Calendar,
   Clock,
@@ -106,9 +106,15 @@ export default function PatientView({
     }
   };
 
+  // Ref-based lock: survives React re-renders, true mutex
+  const submittingLockRef = useRef(false);
+
   const handleSubmitBooking = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSubmitting) return;
+    e.stopPropagation();
+
+    // Double-check: both state and ref lock
+    if (isSubmitting || submittingLockRef.current) return;
 
     setFormMsg(null);
 
@@ -117,7 +123,10 @@ export default function PatientView({
       return;
     }
 
+    // Acquire both locks immediately
     setIsSubmitting(true);
+    submittingLockRef.current = true;
+
     try {
       let serviceFee = SERVICE_PRICES[serviceName] || 400000;
       let commissionRate = 15.0;
@@ -150,6 +159,9 @@ export default function PatientView({
 
       if (res && !res.success) {
         setFormMsg({ type: 'error', text: res.message || 'Không thể tạo đơn khám!' });
+        // Release locks immediately on error so user can retry
+        setIsSubmitting(false);
+        submittingLockRef.current = false;
       } else {
         setFormMsg({
           type: 'success',
@@ -158,9 +170,16 @@ export default function PatientView({
         setSymptomNotes('');
         setSelectedPractitionerId(null);
         window.scrollTo({ top: 0, behavior: 'smooth' });
+
+        // Keep button locked for 5 seconds after success to prevent rapid re-submit
+        setTimeout(() => {
+          setIsSubmitting(false);
+          submittingLockRef.current = false;
+        }, 5000);
       }
-    } finally {
+    } catch {
       setIsSubmitting(false);
+      submittingLockRef.current = false;
     }
   };
 
