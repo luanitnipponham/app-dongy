@@ -716,37 +716,13 @@ export default function Home() {
       <header className="sticky top-0 z-40 bg-white/90 backdrop-blur-md border-b border-slate-200/80 shadow-xs">
         <div className="max-w-6xl mx-auto px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
           {/* Logo Brand */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center shadow-xs">
               <Stethoscope className="w-5 h-5" />
             </div>
             <div>
-              <div className="text-xs sm:text-sm font-black text-slate-800 tracking-tight flex items-center gap-1.5">
+              <div className="text-sm sm:text-base font-black text-slate-900 tracking-tight">
                 ĐÔNG Y HOMECARE
-                <button
-                  type="button"
-                  onClick={() => setShowDbModal(true)}
-                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 cursor-pointer transition-all ${
-                    isLiveConnected
-                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
-                      : 'bg-amber-100 text-amber-900 hover:bg-amber-200'
-                  }`}
-                  title="Nhấn để xem trạng thái kết nối Supabase"
-                >
-                  {isLiveConnected ? (
-                    <>
-                      <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Supabase Live
-                    </>
-                  ) : (
-                    <>
-                      <AlertCircle className="w-3 h-3 text-amber-600" /> Supabase: Cần Chạy SQL
-                    </>
-                  )}
-                </button>
-              </div>
-              <div className="text-[10px] text-slate-500 flex items-center gap-1">
-                <Database className="w-2.5 h-2.5 text-emerald-600" />
-                <span className="truncate max-w-[200px] sm:max-w-xs">{connectionNote}</span>
               </div>
             </div>
           </div>
@@ -754,6 +730,17 @@ export default function Home() {
           {/* Current User Pill & Switcher */}
           {currentUser ? (
             <div className="flex items-center gap-2">
+              <div className="hidden md:flex items-center text-xs font-semibold text-slate-700 bg-amber-50/90 px-3 py-1 rounded-full border border-amber-200/80 shadow-2xs gap-1.5 mr-1">
+                <span className="text-amber-800 font-bold">Design App:</span>
+                <span className="text-slate-900 font-bold">Mr.Luân</span>
+                <a
+                  href="tel:0969798896"
+                  className="text-emerald-700 hover:text-emerald-800 font-extrabold tracking-wide hover:underline ml-0.5"
+                >
+                  09.6979.8896
+                </a>
+              </div>
+
               <div className="text-right hidden sm:block">
                 <div className="text-xs font-bold text-slate-900 flex items-center justify-end gap-1">
                   {currentUser.full_name}
@@ -803,8 +790,16 @@ export default function Home() {
               </button>
             </div>
           ) : (
-            <div className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
-              Cổng Đăng Nhập & Đăng Ký Y Tế
+            <div className="text-xs font-semibold text-slate-800 bg-gradient-to-r from-amber-50 to-orange-50 px-3.5 py-1.5 rounded-full border border-amber-200 shadow-2xs flex items-center gap-1.5">
+              <span className="text-amber-800 font-bold">Design App :</span>
+              <span className="text-slate-900 font-bold">Mr.Luân</span>
+              <span className="text-amber-300">•</span>
+              <a
+                href="tel:0969798896"
+                className="text-emerald-700 hover:text-emerald-800 font-extrabold tracking-wide hover:underline"
+              >
+                09.6979.8896
+              </a>
             </div>
           )}
         </div>
