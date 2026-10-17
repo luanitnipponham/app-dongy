@@ -89,13 +89,25 @@ export default function Home() {
 
         // Fetch practitioner profiles
         const { data: pracData } = await supabase.from('practitioner_profiles').select('*');
+        const pracMap: Record<string, PractitionerProfile> = {};
         if (pracData) {
-          const pracMap: Record<string, PractitionerProfile> = {};
           pracData.forEach((p) => {
             pracMap[p.user_id] = p;
           });
           setPractitioners(pracMap);
         }
+
+        // Keep currentUser and currentPractitioner fresh if they exist
+        setCurrentUser((prevCur) => {
+          if (!prevCur) return null;
+          const updated = profData.find((p) => p.id === prevCur.id);
+          return updated || prevCur;
+        });
+
+        setCurrentPractitioner((prevPrac) => {
+          if (!prevPrac) return null;
+          return pracMap[prevPrac.user_id] || prevPrac;
+        });
 
         // Fetch wallets
         const { data: walletData } = await supabase.from('wallets').select('*');
@@ -137,10 +149,34 @@ export default function Home() {
   useEffect(() => {
     checkSupabaseConnection();
 
-    // Supabase Realtime Listener
+    // Supabase Realtime Listener for ALL tables
     if (isSupabaseConfigured) {
       const channel = supabase
-        .channel('public:bookings')
+        .channel('public:realtime_sync')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'profiles' },
+          (payload) => {
+            console.log('Realtime Profile Change detected:', payload);
+            checkSupabaseConnection();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'practitioner_profiles' },
+          (payload) => {
+            console.log('Realtime Practitioner Change detected:', payload);
+            checkSupabaseConnection();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'wallets' },
+          (payload) => {
+            console.log('Realtime Wallet Change detected:', payload);
+            checkSupabaseConnection();
+          }
+        )
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'bookings' },
@@ -689,7 +725,9 @@ export default function Home() {
     }
 
     if (isLiveConnected) {
-      supabase.from('profiles').update({ password_hash: pwd }).eq('id', userId);
+      supabase.from('profiles').update({ password_hash: pwd }).eq('id', userId).then(() => {
+        checkSupabaseConnection();
+      });
     }
   };
 
@@ -788,6 +826,7 @@ export default function Home() {
           const { error: wErr } = await supabase.from('wallets').insert([newWallet]);
           if (wErr) console.error('Supabase insert wallet error:', wErr);
         }
+        await checkSupabaseConnection();
       } catch (e) {
         console.error('Supabase live create user error:', e);
       }
@@ -846,11 +885,24 @@ export default function Home() {
             .eq('id', userId);
         }
         if (data.practitioner && Object.keys(data.practitioner).length > 0) {
-          await supabase
+          const { data: existingPrac } = await supabase
             .from('practitioner_profiles')
-            .update({ ...data.practitioner, updated_at: now })
-            .eq('user_id', userId);
+            .select('id')
+            .eq('user_id', userId)
+            .maybeSingle();
+
+          if (existingPrac) {
+            await supabase
+              .from('practitioner_profiles')
+              .update({ ...data.practitioner, updated_at: now })
+              .eq('user_id', userId);
+          } else {
+            await supabase
+              .from('practitioner_profiles')
+              .insert([{ ...data.practitioner, user_id: userId, updated_at: now }]);
+          }
         }
+        await checkSupabaseConnection();
       } catch (e) {
         console.error('Supabase live update user error:', e);
       }
@@ -898,6 +950,7 @@ export default function Home() {
     if (isLiveConnected) {
       try {
         await supabase.from('profiles').delete().eq('id', userId);
+        await checkSupabaseConnection();
       } catch (e) {
         console.error('Supabase live delete user error:', e);
       }
@@ -999,12 +1052,20 @@ export default function Home() {
                   onChange={(e) => handleQuickSwitchUser(e.target.value)}
                   className="bg-transparent font-bold text-xs text-slate-800 focus:outline-none cursor-pointer pr-1"
                 >
-                  <option value="0901234567">BN. Nguyễn Văn An</option>
-                  <option value="0909999888">BN. Bích Ngọc</option>
-                  <option value="0988777666">Lương y Đức (Đã duyệt CCHN)</option>
-                  <option value="0912345678">BS. Mai (Đã duyệt CCHN)</option>
-                  <option value="0977555444">BS. Tuấn (Chờ duyệt CCHN)</option>
-                  <option value="0999888999">Admin Quản Trị</option>
+                  {profiles.map((p) => {
+                    const prac = practitioners[p.id];
+                    const label =
+                      p.role === 'ADMIN'
+                        ? `Admin: ${p.full_name}`
+                        : p.role === 'PRACTITIONER'
+                        ? `${p.full_name} (${prac?.is_verified ? 'Đã duyệt' : 'Chờ duyệt'})`
+                        : `BN. ${p.full_name}`;
+                    return (
+                      <option key={p.id} value={p.phone}>
+                        {label} ({p.phone})
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 

@@ -103,11 +103,19 @@ export default function AuthPortal({
     }, 400);
   };
 
-  const handleQuickLogin = (quickPhone: string) => {
-    setPhone(quickPhone);
-    setPassword('123456');
-    const matchedProfile = profiles.find((p) => normalizePhoneNumber(p.phone) === quickPhone);
+  const handleQuickLogin = (target: string | Profile) => {
+    let matchedProfile: Profile | undefined;
+    if (typeof target === 'string') {
+      const clean = normalizePhoneNumber(target);
+      matchedProfile = profiles.find((p) => normalizePhoneNumber(p.phone) === clean);
+    } else {
+      matchedProfile = target;
+    }
+
     if (matchedProfile) {
+      setPhone(matchedProfile.phone);
+      setPassword(matchedProfile.password_hash || '123456');
+      setErrorMsg('');
       const prac = practitioners[matchedProfile.id];
       onLoginSuccess(matchedProfile, prac);
     }
@@ -545,68 +553,66 @@ export default function AuthPortal({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-left">
-            <button
-              type="button"
-              onClick={() => handleQuickLogin('0901234567')}
-              className="p-2.5 rounded-xl bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 transition-all text-left group shadow-xs"
-            >
-              <div className="text-xs font-bold text-slate-800 group-hover:text-emerald-700 flex items-center justify-between">
-                <span>Nguyễn Văn An</span>
-                <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">Bệnh nhân</span>
-              </div>
-              <div className="text-[11px] text-slate-500 font-mono mt-0.5">0901234567 • Có đơn KB-01</div>
-            </button>
+            {profiles.map((u) => {
+              const prac = practitioners[u.id];
+              const isAdmin = u.role === 'ADMIN';
+              const isDoctor = u.role === 'PRACTITIONER';
 
-            <button
-              type="button"
-              onClick={() => handleQuickLogin('0988777666')}
-              className="p-2.5 rounded-xl bg-white hover:bg-teal-50 border border-slate-200 hover:border-teal-300 transition-all text-left group shadow-xs"
-            >
-              <div className="text-xs font-bold text-slate-800 group-hover:text-teal-700 flex items-center justify-between">
-                <span>Lương y Trần Hữu Đức</span>
-                <span className="text-[10px] bg-teal-100 text-teal-800 px-1.5 py-0.5 rounded">Đã duyệt CCHN</span>
-              </div>
-              <div className="text-[11px] text-slate-500 font-mono mt-0.5">0988777666 • Nhận đơn KB-01</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleQuickLogin('0912345678')}
-              className="p-2.5 rounded-xl bg-white hover:bg-teal-50 border border-slate-200 hover:border-teal-300 transition-all text-left group shadow-xs"
-            >
-              <div className="text-xs font-bold text-slate-800 group-hover:text-teal-700 flex items-center justify-between">
-                <span>BS. Lê Thị Mai</span>
-                <span className="text-[10px] bg-teal-100 text-teal-800 px-1.5 py-0.5 rounded">Đã duyệt CCHN</span>
-              </div>
-              <div className="text-[11px] text-slate-500 font-mono mt-0.5">0912345678 • Không thấy KB-01</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleQuickLogin('0977555444')}
-              className="p-2.5 rounded-xl bg-white hover:bg-amber-50 border border-slate-200 hover:border-amber-300 transition-all text-left group shadow-xs"
-            >
-              <div className="text-xs font-bold text-slate-800 group-hover:text-amber-700 flex items-center justify-between">
-                <span>BS. Phạm Minh Tuấn</span>
-                <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">Chờ duyệt CCHN</span>
-              </div>
-              <div className="text-[11px] text-slate-500 font-mono mt-0.5">0977555444 • Bị khóa thẩm định</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleQuickLogin('0999888999')}
-              className="sm:col-span-2 p-2.5 rounded-xl bg-purple-50 hover:bg-purple-100 border border-purple-200 hover:border-purple-300 transition-all text-left group shadow-xs"
-            >
-              <div className="text-xs font-bold text-purple-900 flex items-center justify-between">
-                <span className="flex items-center gap-1.5">
-                  <ShieldCheck className="w-3.5 h-3.5 text-purple-600" />
-                  Admin Quản Trị Hệ Thống
-                </span>
-                <span className="text-[10px] bg-purple-200 text-purple-900 px-1.5 py-0.5 rounded font-bold">Toàn quyền</span>
-              </div>
-              <div className="text-[11px] text-purple-700 font-mono mt-0.5">0999888999 • Xem 100% đơn, duyệt CCHN, đổi thầy thuốc</div>
-            </button>
+              return (
+                <button
+                  key={u.id}
+                  type="button"
+                  onClick={() => handleQuickLogin(u)}
+                  className={`p-2.5 rounded-xl border transition-all text-left group shadow-xs cursor-pointer ${
+                    isAdmin
+                      ? 'sm:col-span-2 bg-purple-50 hover:bg-purple-100 border-purple-200 hover:border-purple-300'
+                      : isDoctor
+                      ? 'bg-white hover:bg-teal-50 border-slate-200 hover:border-teal-300'
+                      : 'bg-white hover:bg-emerald-50 border-slate-200 hover:border-emerald-300'
+                  }`}
+                >
+                  <div className="text-xs font-bold text-slate-800 flex items-center justify-between">
+                    <span
+                      className={`flex items-center gap-1.5 truncate ${
+                        isAdmin
+                          ? 'text-purple-900 group-hover:text-purple-950 font-extrabold'
+                          : isDoctor
+                          ? 'group-hover:text-teal-700'
+                          : 'group-hover:text-emerald-700'
+                      }`}
+                    >
+                      {isAdmin && <ShieldCheck className="w-3.5 h-3.5 text-purple-600 shrink-0" />}
+                      {u.full_name}
+                    </span>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded font-bold shrink-0 ${
+                        isAdmin
+                          ? 'bg-purple-200 text-purple-900'
+                          : isDoctor
+                          ? prac?.is_verified
+                            ? 'bg-teal-100 text-teal-800'
+                            : 'bg-amber-100 text-amber-800'
+                          : 'bg-emerald-100 text-emerald-800'
+                      }`}
+                    >
+                      {isAdmin
+                        ? 'Toàn quyền'
+                        : isDoctor
+                        ? prac?.is_verified
+                          ? 'Đã duyệt CCHN'
+                          : 'Chờ duyệt CCHN'
+                        : 'Bệnh nhân'}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-mono mt-0.5 flex items-center justify-between">
+                    <span>{u.phone}</span>
+                    <span className="text-[10px] text-slate-400 font-sans">
+                      MK: {u.password_hash || '123456'}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
