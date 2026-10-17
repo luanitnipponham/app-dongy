@@ -21,6 +21,16 @@ import {
   CreditCard,
   Building,
   Phone,
+  UserPlus,
+  Pencil,
+  Trash2,
+  Plus,
+  Lock,
+  User,
+  Shield,
+  Check,
+  X,
+  Sparkles,
 } from 'lucide-react';
 import {
   Profile,
@@ -28,6 +38,7 @@ import {
   Booking,
   Wallet,
   WalletTransaction,
+  UserRole,
 } from '@/types/database';
 import { formatVND, formatDateTime } from '@/lib/utils-medical';
 
@@ -41,9 +52,22 @@ interface AdminViewProps {
   onVerifyPractitioner: (userId: string, isVerified: boolean) => void;
   onReassignDoctor: (bookingId: string, newDoctorId: string) => void;
   onCancelBookingByAdmin: (bookingId: string) => void;
-  onResetPassword: (userId: string) => void;
+  onResetPassword: (userId: string, newPassword?: string) => void;
   onAdjustWallet: (userId: string, amount: number) => void;
   onUpdateCommissionRate: (userId: string, newRate: number) => void;
+  onCreateUser?: (data: {
+    profile: Omit<Profile, 'id' | 'created_at' | 'updated_at'>;
+    practitioner?: Partial<PractitionerProfile>;
+    initialBalance?: number;
+  }) => Promise<{ success: boolean; message?: string }>;
+  onUpdateUser?: (
+    userId: string,
+    data: {
+      profile: Partial<Profile>;
+      practitioner?: Partial<PractitionerProfile>;
+    }
+  ) => Promise<{ success: boolean; message?: string }>;
+  onDeleteUser?: (userId: string) => Promise<{ success: boolean; message?: string }>;
 }
 
 export default function AdminView({
@@ -59,6 +83,9 @@ export default function AdminView({
   onResetPassword,
   onAdjustWallet,
   onUpdateCommissionRate,
+  onCreateUser,
+  onUpdateUser,
+  onDeleteUser,
 }: AdminViewProps) {
   const [activeTab, setActiveTab] = useState<'EKYC' | 'BOOKINGS' | 'USERS' | 'REVENUE'>('EKYC');
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
@@ -67,6 +94,52 @@ export default function AdminView({
   // Reassign modal state
   const [reassignBookingId, setReassignBookingId] = useState<string | null>(null);
   const [targetDoctorId, setTargetDoctorId] = useState<string>('');
+
+  // User Management state
+  const [searchUser, setSearchUser] = useState<string>('');
+  const [filterRole, setFilterRole] = useState<'ALL' | 'PATIENT' | 'PRACTITIONER' | 'ADMIN'>('ALL');
+  const [showPasswordMap, setShowPasswordMap] = useState<Record<string, boolean>>({});
+
+  // Create User modal state
+  const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
+  const [createForm, setCreateForm] = useState({
+    fullName: '',
+    phone: '',
+    password: '123456',
+    role: 'PATIENT' as UserRole,
+    address: '',
+    cchnNumber: '',
+    issuedBy: 'Sở Y Tế TP.HCM',
+    experienceYears: 5,
+    specialties: 'Châm cứu, Xoa bóp bấm huyệt',
+    isVerified: true,
+    initialBalance: 500000,
+  });
+
+  // Edit User modal state
+  const [editingUser, setEditingUser] = useState<Profile | null>(null);
+  const [editForm, setEditForm] = useState({
+    fullName: '',
+    phone: '',
+    password: '',
+    role: 'PATIENT' as UserRole,
+    address: '',
+    isActive: true,
+    cchnNumber: '',
+    issuedBy: '',
+    experienceYears: 5,
+    specialties: '',
+    isVerified: true,
+    commissionRate: 15,
+  });
+
+  // Reset Password modal state
+  const [resetModalUser, setResetModalUser] = useState<Profile | null>(null);
+  const [customPassword, setCustomPassword] = useState<string>('');
+
+  // Delete User modal state
+  const [deletingUser, setDeletingUser] = useState<Profile | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
   // Top-level metrics
   const unverifiedPractitioners = Object.values(practitioners).filter((p) => !p.is_verified);
@@ -81,6 +154,18 @@ export default function AdminView({
     (sum, b) => sum + b.commission_amount,
     0
   );
+
+  // Filtered profiles for User Management tab
+  const filteredProfiles: Profile[] = profiles.filter((u) => {
+    const matchRole = filterRole === 'ALL' || u.role === filterRole;
+    const term = searchUser.trim().toLowerCase();
+    const matchSearch =
+      !term ||
+      u.full_name.toLowerCase().includes(term) ||
+      u.phone.includes(term) ||
+      (u.default_address && u.default_address.toLowerCase().includes(term));
+    return matchRole && matchSearch;
+  });
 
   return (
     <div className="w-full max-w-4xl mx-auto px-4 pb-20">
@@ -510,50 +595,237 @@ export default function AdminView({
       {/* TAB 3: USER MANAGEMENT & RESET PASSWORD */}
       {activeTab === 'USERS' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
-              <Users className="w-4 h-4 text-purple-700" />
-              Quản Lý Tài Khoản Toàn Hệ Thống ({profiles.length})
-            </h3>
+          {/* Action Header & Search */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                <Users className="w-4 h-4 text-purple-700" />
+                Quản Lý Tài Khoản Toàn Hệ Thống ({filteredProfiles.length}/{profiles.length})
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Toàn quyền thêm mới, cập nhật hồ sơ, đổi mật khẩu và xóa tài khoản.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setCreateForm({
+                  fullName: '',
+                  phone: '',
+                  password: '123456',
+                  role: 'PATIENT',
+                  address: '',
+                  cchnNumber: '',
+                  issuedBy: 'Sở Y Tế TP.HCM',
+                  experienceYears: 5,
+                  specialties: 'Châm cứu, Xoa bóp bấm huyệt',
+                  isVerified: true,
+                  initialBalance: 500000,
+                });
+                setShowCreateModal(true);
+              }}
+              className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-purple-700 to-indigo-600 hover:from-purple-800 hover:to-indigo-700 text-white font-bold text-xs shadow-md shadow-purple-900/20 flex items-center justify-center gap-1.5 transition-all cursor-pointer shrink-0"
+            >
+              <UserPlus className="w-4 h-4" />
+              + Thêm Tài Khoản Mới
+            </button>
           </div>
 
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-md divide-y divide-slate-100 overflow-hidden">
-            {profiles.map((user) => {
-              const prac = practitioners[user.id];
-              const wallet = wallets[user.id];
-
-              return (
-                <div
-                  key={user.id}
-                  className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+          {/* Search & Filter Bar */}
+          <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+            <div className="relative flex-1">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchUser}
+                onChange={(e) => setSearchUser(e.target.value)}
+                placeholder="Tìm theo tên, số điện thoại, địa chỉ..."
+                className="w-full pl-9 pr-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 focus:outline-none focus:border-purple-500"
+              />
+              {searchUser && (
+                <button
+                  type="button"
+                  onClick={() => setSearchUser('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
                 >
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <strong className="text-sm text-slate-900">{user.full_name}</strong>
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                  ✕
+                </button>
+              )}
+            </div>
+
+            {/* Role Filter Chips */}
+            <div className="flex items-center gap-1 overflow-x-auto text-[11px] font-bold">
+              <button
+                type="button"
+                onClick={() => setFilterRole('ALL')}
+                className={`px-2.5 py-1 rounded-xl transition-all ${
+                  filterRole === 'ALL'
+                    ? 'bg-purple-900 text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                Tất cả ({profiles.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterRole('PATIENT')}
+                className={`px-2.5 py-1 rounded-xl transition-all ${
+                  filterRole === 'PATIENT'
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                }`}
+              >
+                Bệnh nhân ({profiles.filter((p) => p.role === 'PATIENT').length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterRole('PRACTITIONER')}
+                className={`px-2.5 py-1 rounded-xl transition-all ${
+                  filterRole === 'PRACTITIONER'
+                    ? 'bg-teal-700 text-white'
+                    : 'bg-teal-50 text-teal-800 hover:bg-teal-100'
+                }`}
+              >
+                Thầy thuốc ({profiles.filter((p) => p.role === 'PRACTITIONER').length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterRole('ADMIN')}
+                className={`px-2.5 py-1 rounded-xl transition-all ${
+                  filterRole === 'ADMIN'
+                    ? 'bg-purple-700 text-white'
+                    : 'bg-purple-50 text-purple-800 hover:bg-purple-100'
+                }`}
+              >
+                Admin ({profiles.filter((p) => p.role === 'ADMIN').length})
+              </button>
+            </div>
+          </div>
+
+          {/* User List */}
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-md divide-y divide-slate-100 overflow-hidden">
+            {filteredProfiles.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-500">
+                Không tìm thấy người dùng nào phù hợp với điều kiện tìm kiếm.
+              </div>
+            ) : (
+              filteredProfiles.map((user) => {
+                const prac = practitioners[user.id];
+                const wallet = wallets[user.id];
+                const isPasswordShown = !!showPasswordMap[user.id];
+
+                return (
+                  <div
+                    key={user.id}
+                    className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs hover:bg-slate-50/60 transition-colors"
+                  >
+                    <div className="flex items-start gap-3">
+                      {/* Avatar initial */}
+                      <div
+                        className={`w-10 h-10 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 shadow-xs ${
                           user.role === 'ADMIN'
-                            ? 'bg-purple-100 text-purple-900'
+                            ? 'bg-purple-100 text-purple-900 border border-purple-200'
                             : user.role === 'PRACTITIONER'
-                            ? 'bg-teal-100 text-teal-900'
-                            : 'bg-emerald-100 text-emerald-900'
+                            ? 'bg-teal-100 text-teal-900 border border-teal-200'
+                            : 'bg-emerald-100 text-emerald-900 border border-emerald-200'
                         }`}
                       >
-                        {user.role}
-                      </span>
-                    </div>
-                    <div className="text-slate-500 font-mono mt-0.5">
-                      SĐT: {user.phone} • MK: {user.password_hash}
-                    </div>
-                    {user.default_address && (
-                      <div className="text-slate-500 text-[11px] mt-0.5">{user.default_address}</div>
-                    )}
-                  </div>
+                        {user.full_name ? user.full_name.charAt(0).toUpperCase() : 'U'}
+                      </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    {/* Add funds to wallet for practitioner */}
-                    {user.role === 'PRACTITIONER' && (
-                      <div className="flex items-center gap-1">
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <strong className="text-sm font-extrabold text-slate-900">
+                            {user.full_name}
+                          </strong>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                              user.role === 'ADMIN'
+                                ? 'bg-purple-100 text-purple-900 border border-purple-200'
+                                : user.role === 'PRACTITIONER'
+                                ? 'bg-teal-100 text-teal-900 border border-teal-200'
+                                : 'bg-emerald-100 text-emerald-900 border border-emerald-200'
+                            }`}
+                          >
+                            {user.role === 'PATIENT' ? 'Bệnh nhân' : user.role === 'PRACTITIONER' ? 'Thầy thuốc' : 'Admin'}
+                          </span>
+
+                          {user.is_active === false && (
+                            <span className="px-1.5 py-0.2 rounded-full bg-rose-100 text-rose-800 text-[10px] font-bold">
+                              Tạm khóa
+                            </span>
+                          )}
+
+                          {user.id === currentUser.id && (
+                            <span className="px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-900 text-[10px] font-bold">
+                              Bạn đang đăng nhập
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-500 font-mono text-[11px]">
+                          <span className="flex items-center gap-1 text-slate-700 font-bold">
+                            <Phone className="w-3 h-3 text-slate-400" />
+                            {user.phone}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Lock className="w-3 h-3 text-slate-400" />
+                            MK:{' '}
+                            <span className="font-bold text-slate-800">
+                              {isPasswordShown ? user.password_hash : '••••••'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setShowPasswordMap((prev) => ({
+                                  ...prev,
+                                  [user.id]: !prev[user.id],
+                                }))
+                              }
+                              className="text-slate-400 hover:text-slate-600 p-0.5 ml-0.5"
+                              title={isPasswordShown ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                            >
+                              <Eye className="w-3 h-3" />
+                            </button>
+                          </span>
+                        </div>
+
+                        {user.default_address && (
+                          <div className="text-slate-500 text-[11px] line-clamp-1">
+                            📍 {user.default_address}
+                          </div>
+                        )}
+
+                        {/* Practitioner metadata if applicable */}
+                        {user.role === 'PRACTITIONER' && prac && (
+                          <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
+                            <span className="px-2 py-0.5 rounded-lg bg-slate-100 text-slate-700 font-mono font-bold border border-slate-200">
+                              CCHN: {prac.license_number}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-lg font-bold border ${
+                                prac.is_verified
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  : 'bg-amber-50 text-amber-900 border-amber-200'
+                              }`}
+                            >
+                              {prac.is_verified ? '✓ Đã duyệt CCHN' : '⏳ Chờ duyệt CCHN'}
+                            </span>
+                            {wallet && (
+                              <span className="px-2 py-0.5 rounded-lg bg-teal-50 text-teal-800 font-bold border border-teal-200">
+                                Ví: {formatVND(wallet.available_balance)}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Actions toolbar */}
+                    <div className="flex flex-wrap items-center gap-1.5 self-end md:self-center shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100 w-full md:w-auto justify-end">
+                      {/* Top-up wallet for practitioner */}
+                      {user.role === 'PRACTITIONER' && (
                         <button
                           type="button"
                           onClick={() => {
@@ -563,32 +835,73 @@ export default function AdminView({
                               text: `Đã cộng 200.000đ vào Ví của ${user.full_name}`,
                             });
                           }}
-                          className="px-2.5 py-1.5 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 font-bold text-[11px]"
+                          className="px-2.5 py-1.5 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                          title="Cộng nhanh 200.000đ vào ví"
                         >
+                          <CreditCard className="w-3 h-3" />
                           +200k Ví
                         </button>
-                      </div>
-                    )}
+                      )}
 
-                    {/* Reset Password Button */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onResetPassword(user.id);
-                        setAdminMsg({
-                          type: 'success',
-                          text: `Đã reset mật khẩu của ${user.full_name} về '123456'!`,
-                        });
-                      }}
-                      className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] flex items-center gap-1"
-                    >
-                      <KeyRound className="w-3 h-3 text-slate-500" />
-                      Reset MK (123456)
-                    </button>
+                      {/* Edit Button */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const p = practitioners[user.id];
+                          setEditingUser(user);
+                          setEditForm({
+                            fullName: user.full_name,
+                            phone: user.phone,
+                            password: user.password_hash,
+                            role: user.role,
+                            address: user.default_address || '',
+                            isActive: user.is_active ?? true,
+                            cchnNumber: p?.license_number || '',
+                            issuedBy: p?.issued_by || 'Sở Y Tế',
+                            experienceYears: p?.years_of_experience || 5,
+                            specialties: p?.specialties ? p.specialties.join(', ') : '',
+                            isVerified: p?.is_verified ?? true,
+                            commissionRate: p?.commission_rate || 15,
+                          });
+                        }}
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                        title="Chỉnh sửa thông tin"
+                      >
+                        <Pencil className="w-3 h-3 text-slate-500" />
+                        Sửa
+                      </button>
+
+                      {/* Reset Password Button */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setResetModalUser(user);
+                          setCustomPassword('');
+                        }}
+                        className="px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                        title="Đặt lại mật khẩu"
+                      >
+                        <KeyRound className="w-3 h-3 text-amber-600" />
+                        Reset MK
+                      </button>
+
+                      {/* Delete Button (safe check) */}
+                      {user.id !== currentUser.id && (
+                        <button
+                          type="button"
+                          onClick={() => setDeletingUser(user)}
+                          className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                          title="Xóa tài khoản"
+                        >
+                          <Trash2 className="w-3 h-3 text-rose-600" />
+                          Xóa
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
       )}
@@ -731,6 +1044,691 @@ export default function AdminView({
               alt="Giấy phép phóng to"
               className="max-h-[80vh] w-auto mx-auto object-contain rounded-2xl"
             />
+          </div>
+        </div>
+      )}
+
+      {/* 1. MODAL TẠO MỚI TÀI KHOẢN */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95 my-8">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-purple-100 text-purple-800 flex items-center justify-center font-bold">
+                  <UserPlus className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-extrabold text-slate-900 uppercase">
+                    Thêm Người Dùng Mới
+                  </h4>
+                  <p className="text-[11px] text-slate-500">Khởi tạo tài khoản và phân quyền hệ thống</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCreateModal(false)}
+                className="text-slate-400 hover:text-slate-600 font-bold text-sm p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!createForm.fullName.trim() || !createForm.phone.trim()) {
+                  setAdminMsg({ type: 'error', text: 'Vui lòng nhập đầy đủ Họ tên và Số điện thoại!' });
+                  return;
+                }
+
+                setIsSubmitting(true);
+                try {
+                  if (onCreateUser) {
+                    const res = await onCreateUser({
+                      profile: {
+                        phone: createForm.phone.trim(),
+                        password_hash: createForm.password.trim() || '123456',
+                        full_name: createForm.fullName.trim(),
+                        avatar_url: null,
+                        default_address: createForm.address.trim() || null,
+                        role: createForm.role,
+                        is_active: true,
+                      },
+                      practitioner:
+                        createForm.role === 'PRACTITIONER'
+                          ? {
+                              license_number:
+                                createForm.cchnNumber.trim() ||
+                                'CCHN-' + Math.floor(1000 + Math.random() * 9000),
+                              issued_by: createForm.issuedBy.trim() || 'Sở Y Tế TP.HCM',
+                              years_of_experience: Number(createForm.experienceYears) || 5,
+                              specialties: createForm.specialties
+                                ? createForm.specialties.split(',').map((s) => s.trim())
+                                : ['Châm cứu', 'Xoa bóp'],
+                              is_verified: createForm.isVerified,
+                            }
+                          : undefined,
+                      initialBalance: createForm.initialBalance,
+                    });
+
+                    if (res.success) {
+                      setAdminMsg({ type: 'success', text: res.message || 'Thêm tài khoản thành công!' });
+                      setShowCreateModal(false);
+                    } else {
+                      setAdminMsg({ type: 'error', text: res.message || 'Có lỗi xảy ra khi tạo tài khoản!' });
+                    }
+                  }
+                } finally {
+                  setIsSubmitting(false);
+                }
+              }}
+              className="space-y-3.5 text-xs"
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Họ và Tên <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={createForm.fullName}
+                    onChange={(e) => setCreateForm({ ...createForm, fullName: e.target.value })}
+                    placeholder="VD: Nguyễn Văn Nam"
+                    className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-900 focus:outline-none focus:border-purple-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Số Điện Thoại <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    value={createForm.phone}
+                    onChange={(e) => setCreateForm({ ...createForm, phone: e.target.value })}
+                    placeholder="VD: 0988111222"
+                    className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-mono font-semibold text-slate-900 focus:outline-none focus:border-purple-600"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Mật Khẩu Khởi Tạo</label>
+                  <input
+                    type="text"
+                    value={createForm.password}
+                    onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
+                    placeholder="Mặc định: 123456"
+                    className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-mono font-semibold text-slate-900 focus:outline-none focus:border-purple-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Vai Trò (Role) <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    value={createForm.role}
+                    onChange={(e) =>
+                      setCreateForm({ ...createForm, role: e.target.value as UserRole })
+                    }
+                    className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 focus:outline-none focus:border-purple-600"
+                  >
+                    <option value="PATIENT">Bệnh nhân (PATIENT)</option>
+                    <option value="PRACTITIONER">Thầy thuốc / Bác sĩ (PRACTITIONER)</option>
+                    <option value="ADMIN">Quản trị viên (ADMIN)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Địa Chỉ Mặc Định</label>
+                <input
+                  type="text"
+                  value={createForm.address}
+                  onChange={(e) => setCreateForm({ ...createForm, address: e.target.value })}
+                  placeholder="VD: 123 Nguyễn Huệ, Phường Bến Nghé, Quận 1, TP.HCM"
+                  className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 focus:outline-none focus:border-purple-600"
+                />
+              </div>
+
+              {/* Chi tiết bổ sung nếu là Thầy thuốc */}
+              {createForm.role === 'PRACTITIONER' && (
+                <div className="p-3.5 bg-teal-50/70 border border-teal-200 rounded-2xl space-y-3 mt-2">
+                  <div className="font-extrabold text-teal-900 text-xs flex items-center gap-1.5">
+                    <FileBadge className="w-3.5 h-3.5 text-teal-700" />
+                    Thông Tin Pháp Lý Thầy Thuốc (CCHN & Ví):
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-bold text-teal-800 text-[11px] mb-1">
+                        Số Chứng Chỉ Hành Nghề (CCHN)
+                      </label>
+                      <input
+                        type="text"
+                        value={createForm.cchnNumber}
+                        onChange={(e) =>
+                          setCreateForm({ ...createForm, cchnNumber: e.target.value })
+                        }
+                        placeholder="VD: CCHN-2026-8888"
+                        className="w-full p-2 rounded-lg bg-white border border-teal-200 text-xs font-mono font-bold text-slate-800"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-teal-800 text-[11px] mb-1">
+                        Cơ Quan Cấp CCHN
+                      </label>
+                      <input
+                        type="text"
+                        value={createForm.issuedBy}
+                        onChange={(e) => setCreateForm({ ...createForm, issuedBy: e.target.value })}
+                        placeholder="VD: Sở Y Tế TP.HCM"
+                        className="w-full p-2 rounded-lg bg-white border border-teal-200 text-xs text-slate-800"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-bold text-teal-800 text-[11px] mb-1">
+                        Năm Kinh Nghiệm
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="50"
+                        value={createForm.experienceYears}
+                        onChange={(e) =>
+                          setCreateForm({ ...createForm, experienceYears: Number(e.target.value) })
+                        }
+                        className="w-full p-2 rounded-lg bg-white border border-teal-200 text-xs font-bold text-slate-800"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-teal-800 text-[11px] mb-1">
+                        Nạp Ví Ban Đầu (VNĐ)
+                      </label>
+                      <input
+                        type="number"
+                        step="50000"
+                        value={createForm.initialBalance}
+                        onChange={(e) =>
+                          setCreateForm({ ...createForm, initialBalance: Number(e.target.value) })
+                        }
+                        className="w-full p-2 rounded-lg bg-white border border-teal-200 text-xs font-bold text-slate-800 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-teal-800 text-[11px] mb-1">
+                      Chuyên Khoa / Kỹ Thuật (cách nhau dấu phẩy)
+                    </label>
+                    <input
+                      type="text"
+                      value={createForm.specialties}
+                      onChange={(e) =>
+                        setCreateForm({ ...createForm, specialties: e.target.value })
+                      }
+                      placeholder="Châm cứu, Xoa bóp bấm huyệt, Phục hồi chức năng..."
+                      className="w-full p-2 rounded-lg bg-white border border-teal-200 text-xs text-slate-800"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      type="checkbox"
+                      id="create_is_verified"
+                      checked={createForm.isVerified}
+                      onChange={(e) =>
+                        setCreateForm({ ...createForm, isVerified: e.target.checked })
+                      }
+                      className="w-4 h-4 rounded text-teal-600 cursor-pointer"
+                    />
+                    <label
+                      htmlFor="create_is_verified"
+                      className="text-xs font-bold text-teal-900 cursor-pointer"
+                    >
+                      Duyệt sẵn CCHN ngay (Sẵn sàng nhận ca khám)
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={() => setShowCreateModal(false)}
+                  className="flex-1 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-100 transition-colors"
+                >
+                  Hủy Bỏ
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="flex-1 py-2.5 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-bold shadow-md shadow-purple-900/20 flex items-center justify-center gap-1.5 transition-all"
+                >
+                  <Plus className="w-4 h-4" />
+                  {isSubmitting ? 'Đang tạo...' : 'Tạo Tài Khoản'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 2. MODAL CẬP NHẬT / SỬA THÔNG TIN NGƯỜI DÙNG */}
+      {editingUser && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95 my-8">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
+                  <Pencil className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-extrabold text-slate-900 uppercase">
+                    Cập Nhật Người Dùng
+                  </h4>
+                  <p className="text-[11px] text-slate-500 font-mono">ID: {editingUser.id}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingUser(null)}
+                className="text-slate-400 hover:text-slate-600 font-bold text-sm p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!editForm.fullName.trim() || !editForm.phone.trim()) {
+                  setAdminMsg({ type: 'error', text: 'Họ tên và Số điện thoại không được để trống!' });
+                  return;
+                }
+
+                setIsSubmitting(true);
+                try {
+                  if (onUpdateUser) {
+                    const res = await onUpdateUser(editingUser.id, {
+                      profile: {
+                        full_name: editForm.fullName.trim(),
+                        phone: editForm.phone.trim(),
+                        password_hash: editForm.password.trim() || editingUser.password_hash,
+                        role: editForm.role,
+                        default_address: editForm.address.trim() || null,
+                        is_active: editForm.isActive,
+                      },
+                      practitioner:
+                        editForm.role === 'PRACTITIONER'
+                          ? {
+                              license_number: editForm.cchnNumber.trim(),
+                              issued_by: editForm.issuedBy.trim(),
+                              years_of_experience: Number(editForm.experienceYears) || 5,
+                              commission_rate: Number(editForm.commissionRate) || 15,
+                              specialties: editForm.specialties
+                                ? editForm.specialties.split(',').map((s) => s.trim())
+                                : [],
+                              is_verified: editForm.isVerified,
+                            }
+                          : undefined,
+                    });
+
+                    if (res.success) {
+                      setAdminMsg({ type: 'success', text: res.message || 'Cập nhật thành công!' });
+                      setEditingUser(null);
+                    } else {
+                      setAdminMsg({ type: 'error', text: res.message || 'Cập nhật thất bại!' });
+                    }
+                  }
+                } finally {
+                  setIsSubmitting(false);
+                }
+              }}
+              className="space-y-3.5 text-xs"
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Họ và Tên</label>
+                  <input
+                    type="text"
+                    required
+                    value={editForm.fullName}
+                    onChange={(e) => setEditForm({ ...editForm, fullName: e.target.value })}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-900 focus:outline-none focus:border-purple-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Số Điện Thoại</label>
+                  <input
+                    type="tel"
+                    required
+                    value={editForm.phone}
+                    onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-mono font-semibold text-slate-900 focus:outline-none focus:border-purple-600"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Mật Khẩu</label>
+                  <input
+                    type="text"
+                    value={editForm.password}
+                    onChange={(e) => setEditForm({ ...editForm, password: e.target.value })}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-mono font-semibold text-slate-900 focus:outline-none focus:border-purple-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Vai Trò</label>
+                  <select
+                    value={editForm.role}
+                    onChange={(e) =>
+                      setEditForm({ ...editForm, role: e.target.value as UserRole })
+                    }
+                    className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 focus:outline-none focus:border-purple-600"
+                  >
+                    <option value="PATIENT">Bệnh nhân (PATIENT)</option>
+                    <option value="PRACTITIONER">Thầy thuốc / Bác sĩ (PRACTITIONER)</option>
+                    <option value="ADMIN">Quản trị viên (ADMIN)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Địa Chỉ</label>
+                <input
+                  type="text"
+                  value={editForm.address}
+                  onChange={(e) => setEditForm({ ...editForm, address: e.target.value })}
+                  className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 focus:outline-none focus:border-purple-600"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 py-1">
+                <input
+                  type="checkbox"
+                  id="edit_is_active"
+                  checked={editForm.isActive}
+                  onChange={(e) => setEditForm({ ...editForm, isActive: e.target.checked })}
+                  className="w-4 h-4 rounded text-purple-600 cursor-pointer"
+                />
+                <label
+                  htmlFor="edit_is_active"
+                  className="text-xs font-bold text-slate-800 cursor-pointer"
+                >
+                  Tài khoản đang hoạt động bình thường (bỏ chọn để Tạm khóa)
+                </label>
+              </div>
+
+              {/* Thông tin thêm nếu là Practitioner */}
+              {(editForm.role === 'PRACTITIONER' || practitioners[editingUser.id]) && (
+                <div className="p-3.5 bg-teal-50/70 border border-teal-200 rounded-2xl space-y-2.5 mt-2">
+                  <div className="font-extrabold text-teal-900 text-xs">
+                    Thông Tin Hồ Sơ Thầy Thuốc:
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-bold text-teal-800 text-[11px] mb-1">Số CCHN</label>
+                      <input
+                        type="text"
+                        value={editForm.cchnNumber}
+                        onChange={(e) => setEditForm({ ...editForm, cchnNumber: e.target.value })}
+                        className="w-full p-2 rounded-lg bg-white border border-teal-200 text-xs font-mono font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-teal-800 text-[11px] mb-1">Cơ Quan Cấp</label>
+                      <input
+                        type="text"
+                        value={editForm.issuedBy}
+                        onChange={(e) => setEditForm({ ...editForm, issuedBy: e.target.value })}
+                        className="w-full p-2 rounded-lg bg-white border border-teal-200 text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-bold text-teal-800 text-[11px] mb-1">Năm Kinh Nghiệm</label>
+                      <input
+                        type="number"
+                        value={editForm.experienceYears}
+                        onChange={(e) =>
+                          setEditForm({ ...editForm, experienceYears: Number(e.target.value) })
+                        }
+                        className="w-full p-2 rounded-lg bg-white border border-teal-200 text-xs font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-teal-800 text-[11px] mb-1">Chiết Khấu Sàn (%)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="50"
+                        value={editForm.commissionRate}
+                        onChange={(e) =>
+                          setEditForm({ ...editForm, commissionRate: Number(e.target.value) })
+                        }
+                        className="w-full p-2 rounded-lg bg-white border border-teal-200 text-xs font-bold font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-teal-800 text-[11px] mb-1">Chuyên Khoa</label>
+                    <input
+                      type="text"
+                      value={editForm.specialties}
+                      onChange={(e) => setEditForm({ ...editForm, specialties: e.target.value })}
+                      className="w-full p-2 rounded-lg bg-white border border-teal-200 text-xs"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      type="checkbox"
+                      id="edit_is_verified"
+                      checked={editForm.isVerified}
+                      onChange={(e) => setEditForm({ ...editForm, isVerified: e.target.checked })}
+                      className="w-4 h-4 rounded text-teal-600 cursor-pointer"
+                    />
+                    <label
+                      htmlFor="edit_is_verified"
+                      className="text-xs font-bold text-teal-900 cursor-pointer"
+                    >
+                      Đã Thẩm Định Pháp Lý CCHN Hợp Lệ
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={() => setEditingUser(null)}
+                  className="flex-1 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-100 transition-colors"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="flex-1 py-2.5 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-bold shadow-md shadow-purple-900/20 transition-all"
+                >
+                  {isSubmitting ? 'Đang lưu...' : 'Lưu Thay Đổi'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 3. MODAL ĐẶT LẠI MẬT KHẨU */}
+      {resetModalUser && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
+                  <KeyRound className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-extrabold text-slate-900 uppercase">
+                    Đặt Lại Mật Khẩu
+                  </h4>
+                  <p className="text-[11px] text-slate-500 font-bold">{resetModalUser.full_name}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setResetModalUser(null)}
+                className="text-slate-400 hover:text-slate-600 font-bold text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-1">
+              <div className="text-slate-600">Số điện thoại: <strong className="text-slate-900 font-mono">{resetModalUser.phone}</strong></div>
+              <div className="text-slate-600">Mật khẩu hiện tại: <strong className="text-purple-700 font-mono">{resetModalUser.password_hash}</strong></div>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              {/* Quick Reset 123456 */}
+              <button
+                type="button"
+                onClick={() => {
+                  onResetPassword(resetModalUser.id, '123456');
+                  setAdminMsg({
+                    type: 'success',
+                    text: `Đã reset mật khẩu của ${resetModalUser.full_name} về '123456'!`,
+                  });
+                  setResetModalUser(null);
+                }}
+                className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                1-Click: Reset về Mặc Định "123456"
+              </button>
+
+              <div className="relative flex py-1 items-center">
+                <div className="flex-grow border-t border-slate-200"></div>
+                <span className="flex-shrink mx-2 text-[10px] text-slate-400 uppercase font-bold">Hoặc tự nhập mật khẩu</span>
+                <div className="flex-grow border-t border-slate-200"></div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Mật Khẩu Mới Tùy Chọn:</label>
+                <input
+                  type="text"
+                  value={customPassword}
+                  onChange={(e) => setCustomPassword(e.target.value)}
+                  placeholder="Nhập mật khẩu mới..."
+                  className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-200 font-mono font-bold text-slate-900 focus:outline-none focus:border-purple-600 text-xs"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setResetModalUser(null)}
+                  className="flex-1 py-2 rounded-xl text-slate-600 font-bold hover:bg-slate-100"
+                >
+                  Đóng
+                </button>
+                <button
+                  type="button"
+                  disabled={!customPassword.trim()}
+                  onClick={() => {
+                    if (customPassword.trim()) {
+                      onResetPassword(resetModalUser.id, customPassword.trim());
+                      setAdminMsg({
+                        type: 'success',
+                        text: `Đã đổi mật khẩu của ${resetModalUser.full_name} thành '${customPassword.trim()}'!`,
+                      });
+                      setResetModalUser(null);
+                    }
+                  }}
+                  className="flex-1 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 disabled:opacity-50 text-white font-bold shadow-md transition-colors"
+                >
+                  Xác Nhận Đổi
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. MODAL XÁC NHẬN XÓA TÀI KHOẢN */}
+      {deletingUser && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+
+            <div className="text-center space-y-1">
+              <h4 className="text-base font-black text-slate-900">Xác Nhận Xóa Tài Khoản?</h4>
+              <p className="text-xs text-slate-600">
+                Bạn có chắc chắn muốn xóa tài khoản{' '}
+                <strong className="text-slate-900">{deletingUser.full_name}</strong> (SĐT:{' '}
+                <span className="font-mono font-bold">{deletingUser.phone}</span>)?
+              </p>
+            </div>
+
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl text-[11px] text-rose-800">
+              ⚠️ <strong>Cảnh báo:</strong> Thao tác này sẽ xóa vĩnh viễn hồ sơ và dữ liệu liên quan khỏi hệ thống!
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => setDeletingUser(null)}
+                className="flex-1 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-100 text-xs"
+              >
+                Hủy Bỏ
+              </button>
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={async () => {
+                  if (onDeleteUser) {
+                    setIsSubmitting(true);
+                    try {
+                      const res = await onDeleteUser(deletingUser.id);
+                      if (res.success) {
+                        setAdminMsg({ type: 'success', text: res.message || 'Đã xóa người dùng thành công!' });
+                        setDeletingUser(null);
+                      } else {
+                        setAdminMsg({ type: 'error', text: res.message || 'Không thể xóa người dùng!' });
+                      }
+                    } finally {
+                      setIsSubmitting(false);
+                    }
+                  }
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-md shadow-rose-900/20"
+              >
+                {isSubmitting ? 'Đang xóa...' : 'Xóa Vĩnh Viễn'}
+              </button>
+            </div>
           </div>
         </div>
       )}

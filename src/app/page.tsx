@@ -677,14 +677,233 @@ export default function Home() {
   };
 
   // 14. Reset Password
-  const handleResetPassword = (userId: string) => {
+  // 14. Reset Password (with custom or default password)
+  const handleResetPassword = (userId: string, newPassword?: string) => {
+    const pwd = newPassword && newPassword.trim() ? newPassword.trim() : '123456';
     setProfiles((prev) =>
-      prev.map((p) => (p.id === userId ? { ...p, password_hash: '123456' } : p))
+      prev.map((p) => (p.id === userId ? { ...p, password_hash: pwd } : p))
     );
 
-    if (isLiveConnected) {
-      supabase.from('profiles').update({ password_hash: '123456' }).eq('id', userId);
+    if (currentUser?.id === userId) {
+      setCurrentUser((prev) => (prev ? { ...prev, password_hash: pwd } : null));
     }
+
+    if (isLiveConnected) {
+      supabase.from('profiles').update({ password_hash: pwd }).eq('id', userId);
+    }
+  };
+
+  // 14b. Admin Create User
+  const handleCreateUser = async (data: {
+    profile: Omit<Profile, 'id' | 'created_at' | 'updated_at'>;
+    practitioner?: Partial<PractitionerProfile>;
+    initialBalance?: number;
+  }): Promise<{ success: boolean; message?: string }> => {
+    if (profiles.some((p) => p.phone === data.profile.phone)) {
+      return { success: false, message: 'Số điện thoại này đã tồn tại trong hệ thống!' };
+    }
+
+    const newId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : '11111111-1111-1111-1111-' + Date.now().toString().slice(-12).padStart(12, '0');
+    const now = new Date().toISOString();
+
+    const newProfile: Profile = {
+      id: newId,
+      phone: data.profile.phone,
+      password_hash: data.profile.password_hash || '123456',
+      full_name: data.profile.full_name,
+      avatar_url: data.profile.avatar_url || null,
+      default_address: data.profile.default_address || null,
+      role: data.profile.role,
+      is_active: data.profile.is_active ?? true,
+      created_at: now,
+      updated_at: now,
+    };
+
+    setProfiles((prev) => [newProfile, ...prev]);
+
+    let newPrac: PractitionerProfile | null = null;
+    let newWallet: Wallet | null = null;
+
+    if (data.profile.role === 'PRACTITIONER') {
+      const pracId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : '22222222-2222-2222-2222-' + Date.now().toString().slice(-12).padStart(12, '0');
+      newPrac = {
+        id: pracId,
+        user_id: newId,
+        specialties: data.practitioner?.specialties || ['Châm cứu', 'Xoa bóp bấm huyệt'],
+        license_number:
+          data.practitioner?.license_number ||
+          'CCHN-2026-' + Math.floor(1000 + Math.random() * 9000),
+        license_image_url:
+          data.practitioner?.license_image_url ||
+          'https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?w=600&auto=format&fit=crop&q=80',
+        issued_by: data.practitioner?.issued_by || 'Sở Y Tế TP.HCM',
+        years_of_experience: data.practitioner?.years_of_experience || 5,
+        bio: data.practitioner?.bio || 'Bác sĩ / Lương y Y học Cổ truyền chuyên nghiệp',
+        base_service_fee: data.practitioner?.base_service_fee || 400000,
+        commission_rate: data.practitioner?.commission_rate || 15.0,
+        is_verified: data.practitioner?.is_verified ?? true,
+        rejection_reason: null,
+        is_online: data.practitioner?.is_verified ?? true,
+        current_lat: 10.7769,
+        current_lng: 106.7009,
+        rating_avg: 5.0,
+        total_reviews: 1,
+        completed_jobs: 0,
+        cancelled_jobs: 0,
+        updated_at: now,
+      };
+
+      const walletId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : '33333333-3333-3333-3333-' + Date.now().toString().slice(-12).padStart(12, '0');
+      newWallet = {
+        id: walletId,
+        user_id: newId,
+        available_balance: data.initialBalance ?? 500000,
+        locked_balance: 0,
+        updated_at: now,
+      };
+
+      setPractitioners((prev) => ({ ...prev, [newId]: newPrac! }));
+      setWallets((prev) => ({ ...prev, [newId]: newWallet! }));
+    }
+
+    if (isLiveConnected) {
+      try {
+        const { error: pErr } = await supabase.from('profiles').insert([newProfile]);
+        if (pErr) console.error('Supabase insert profile error:', pErr);
+
+        if (newPrac) {
+          const { error: prErr } = await supabase.from('practitioner_profiles').insert([newPrac]);
+          if (prErr) console.error('Supabase insert practitioner error:', prErr);
+        }
+        if (newWallet) {
+          const { error: wErr } = await supabase.from('wallets').insert([newWallet]);
+          if (wErr) console.error('Supabase insert wallet error:', wErr);
+        }
+      } catch (e) {
+        console.error('Supabase live create user error:', e);
+      }
+    }
+
+    return {
+      success: true,
+      message: `Tạo tài khoản ${newProfile.full_name} (${newProfile.phone}) thành công!`,
+    };
+  };
+
+  // 14c. Admin Update User
+  const handleUpdateUser = async (
+    userId: string,
+    data: {
+      profile: Partial<Profile>;
+      practitioner?: Partial<PractitionerProfile>;
+    }
+  ): Promise<{ success: boolean; message?: string }> => {
+    const now = new Date().toISOString();
+
+    setProfiles((prev) =>
+      prev.map((p) => {
+        if (p.id === userId) {
+          return {
+            ...p,
+            ...data.profile,
+            updated_at: now,
+          };
+        }
+        return p;
+      })
+    );
+
+    if (currentUser?.id === userId) {
+      setCurrentUser((prev) => (prev ? { ...prev, ...data.profile, updated_at: now } : null));
+    }
+
+    if (data.practitioner && practitioners[userId]) {
+      setPractitioners((prev) => ({
+        ...prev,
+        [userId]: {
+          ...prev[userId],
+          ...data.practitioner,
+          updated_at: now,
+        },
+      }));
+    }
+
+    if (isLiveConnected) {
+      try {
+        if (data.profile && Object.keys(data.profile).length > 0) {
+          await supabase
+            .from('profiles')
+            .update({ ...data.profile, updated_at: now })
+            .eq('id', userId);
+        }
+        if (data.practitioner && Object.keys(data.practitioner).length > 0) {
+          await supabase
+            .from('practitioner_profiles')
+            .update({ ...data.practitioner, updated_at: now })
+            .eq('user_id', userId);
+        }
+      } catch (e) {
+        console.error('Supabase live update user error:', e);
+      }
+    }
+
+    return { success: true, message: 'Cập nhật thông tin tài khoản thành công!' };
+  };
+
+  // 14d. Admin Delete User
+  const handleDeleteUser = async (
+    userId: string
+  ): Promise<{ success: boolean; message?: string }> => {
+    if (currentUser?.id === userId) {
+      return { success: false, message: 'Không thể tự xóa tài khoản Quản trị viên đang đăng nhập!' };
+    }
+
+    const targetUser = profiles.find((p) => p.id === userId);
+    const userName = targetUser ? targetUser.full_name : userId;
+
+    // Check active bookings
+    const hasActiveBookings = bookings.some(
+      (b) =>
+        (b.patient_id === userId || b.practitioner_id === userId) &&
+        !['COMPLETED', 'CANCELLED_PATIENT', 'CANCELLED_DOCTOR'].includes(b.status)
+    );
+    if (hasActiveBookings) {
+      return {
+        success: false,
+        message: `Không thể xóa ${userName} vì đang có ca khám đang diễn ra hoặc chưa hoàn tất!`,
+      };
+    }
+
+    setProfiles((prev) => prev.filter((p) => p.id !== userId));
+    setPractitioners((prev) => {
+      const copy = { ...prev };
+      delete copy[userId];
+      return copy;
+    });
+    setWallets((prev) => {
+      const copy = { ...prev };
+      delete copy[userId];
+      return copy;
+    });
+
+    if (isLiveConnected) {
+      try {
+        await supabase.from('profiles').delete().eq('id', userId);
+      } catch (e) {
+        console.error('Supabase live delete user error:', e);
+      }
+    }
+
+    return { success: true, message: `Đã xóa tài khoản ${userName} thành công.` };
   };
 
   // 15. Adjust Wallet by Admin
@@ -894,6 +1113,9 @@ export default function Home() {
             onCancelBookingByAdmin={(id) => handleCancelBooking(id, 'ADMIN')}
             onResetPassword={handleResetPassword}
             onAdjustWallet={handleAdjustWallet}
+            onCreateUser={handleCreateUser}
+            onUpdateUser={handleUpdateUser}
+            onDeleteUser={handleDeleteUser}
             onUpdateCommissionRate={(userId, newRate) => {
               setPractitioners((prev) => {
                 const cur = prev[userId];
