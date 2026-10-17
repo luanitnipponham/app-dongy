@@ -60,7 +60,7 @@ export default function PatientView({
   const [activeTab, setActiveTab] = useState<'BOOKING' | 'RECORDS'>('BOOKING');
 
   // Booking form state
-  const [selectedPractitionerId, setSelectedPractitionerId] = useState<string | null>(null);
+  const [selectedPractitionerId] = useState<string | null>(null);
   const [serviceName, setServiceName] = useState('Châm cứu & Bấm huyệt đả thông kinh lạc');
   const [address, setAddress] = useState(currentUser.default_address || '');
   const [symptomNotes, setSymptomNotes] = useState('');
@@ -128,13 +128,9 @@ export default function PatientView({
     submittingLockRef.current = true;
 
     try {
-      let serviceFee = SERVICE_PRICES[serviceName] || 400000;
-      let commissionRate = 15.0;
-
-      if (selectedPractitionerId && practitioners[selectedPractitionerId]) {
-        serviceFee = practitioners[selectedPractitionerId].base_service_fee || serviceFee;
-        commissionRate = practitioners[selectedPractitionerId].commission_rate || 15.0;
-      }
+      // Giá dịch vụ luôn lấy từ bảng giá SERVICE_PRICES theo dịch vụ đã chọn
+      const serviceFee = SERVICE_PRICES[serviceName] || 400000;
+      const commissionRate = 15.0;
 
       const commissionAmount = Math.round((serviceFee * commissionRate) / 100);
       const bookingCode = `KB-${Date.now().toString().slice(-6)}`;
@@ -142,7 +138,7 @@ export default function PatientView({
       const res = await onCreateBooking({
         booking_code: bookingCode,
         patient_id: currentUser.id,
-        practitioner_id: selectedPractitionerId,
+        practitioner_id: null,
         service_name: serviceName,
         address: address.trim(),
         patient_phone: currentUser.phone,
@@ -168,7 +164,6 @@ export default function PatientView({
           text: (res && res.message) || `Đặt lịch thành công mã [${bookingCode}]! Vui lòng chờ Thầy thuốc xác nhận nhận ca.`,
         });
         setSymptomNotes('');
-        setSelectedPractitionerId(null);
         window.scrollTo({ top: 0, behavior: 'smooth' });
 
         // Keep button locked for 5 seconds after success to prevent rapid re-submit
@@ -406,95 +401,30 @@ export default function PatientView({
             )}
 
             <form onSubmit={handleSubmitBooking} className="space-y-4">
-              {/* Step 1: Choose Doctor or Auto */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-                  Bước 1: Chọn Thầy thuốc có Chứng chỉ hành nghề
-                </label>
-
-                {/* Auto select pill */}
-                <div
-                  onClick={() => setSelectedPractitionerId(null)}
-                  className={`p-3.5 rounded-2xl border-2 cursor-pointer transition-all mb-2.5 flex items-center justify-between ${
-                    selectedPractitionerId === null
-                      ? 'border-emerald-600 bg-emerald-50/50'
-                      : 'border-slate-200 hover:border-slate-300 bg-white'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
-                      <Sparkles className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <div className="text-xs sm:text-sm font-bold text-slate-900">
-                        Hệ thống tự động tìm Thầy thuốc gần nhất
-                      </div>
-                      <div className="text-[11px] text-slate-500">
-                        Ưu tiên thầy thuốc đang online trong bán kính 5km
-                      </div>
-                    </div>
+              {/* Thông báo hệ thống tự động tìm Thầy thuốc */}
+              <div className="p-3.5 rounded-2xl border-2 border-emerald-600 bg-emerald-50/50 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                    <Sparkles className="w-5 h-5" />
                   </div>
-                  <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${selectedPractitionerId === null ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-slate-300'}`}>
-                    {selectedPractitionerId === null && <CheckCircle2 className="w-3.5 h-3.5" />}
+                  <div>
+                    <div className="text-xs sm:text-sm font-bold text-slate-900">
+                      Hệ thống tự động tìm Thầy thuốc gần nhất
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      Ưu tiên thầy thuốc có Chứng chỉ hành nghề đang online trong bán kính 5km
+                    </div>
                   </div>
                 </div>
-
-                {/* List verified doctors */}
-                <div className="space-y-2">
-                  <div className="text-[11px] font-bold text-slate-500 uppercase">Hoặc chọn đích danh Thầy thuốc:</div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {verifiedDoctors.map((doc) => {
-                      const docProfile = profiles.find((p) => p.id === doc.user_id);
-                      if (!docProfile) return null;
-                      const isSelected = selectedPractitionerId === doc.user_id;
-
-                      return (
-                        <div
-                          key={doc.id}
-                          onClick={() => setSelectedPractitionerId(doc.user_id)}
-                          className={`p-3 rounded-2xl border-2 cursor-pointer transition-all ${
-                            isSelected
-                              ? 'border-emerald-600 bg-emerald-50/60 shadow-sm'
-                              : 'border-slate-200 hover:border-emerald-200 bg-white'
-                          }`}
-                        >
-                          <div className="flex items-start justify-between">
-                            <div>
-                              <div className="text-xs font-bold text-slate-900 flex items-center gap-1">
-                                {docProfile.full_name}
-                                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                              </div>
-                              <div className="text-[10px] text-emerald-700 font-mono mt-0.5">
-                                {doc.license_number}
-                              </div>
-                            </div>
-                            <span className="inline-flex items-center gap-0.5 text-[11px] font-bold text-amber-600">
-                              <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-                              {doc.rating_avg.toFixed(1)}
-                            </span>
-                          </div>
-
-                          <div className="mt-2 text-[11px] text-slate-500 line-clamp-1">
-                            {doc.specialties.join(', ')}
-                          </div>
-
-                          <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
-                            <span className="font-extrabold text-emerald-800">{formatVND(doc.base_service_fee)}</span>
-                            <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-semibold">
-                              Online
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                <div className="w-5 h-5 rounded-full border-2 flex items-center justify-center border-emerald-600 bg-emerald-600 text-white">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
                 </div>
               </div>
 
-              {/* Step 2: Service & Address */}
+              {/* Chọn dịch vụ */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Bước 2: Chọn dịch vụ y học cổ truyền
+                  Chọn dịch vụ y học cổ truyền
                 </label>
                 <select
                   value={serviceName}
