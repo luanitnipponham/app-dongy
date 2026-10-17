@@ -730,15 +730,27 @@ export default function Home() {
           {/* Current User Pill & Switcher */}
           {currentUser ? (
             <div className="flex items-center gap-2">
-              <div className="hidden md:flex items-center text-xs font-semibold text-slate-700 bg-amber-50/90 px-3 py-1 rounded-full border border-amber-200/80 shadow-2xs gap-1.5 mr-1">
-                <span className="text-amber-800 font-bold">Design App:</span>
-                <span className="text-slate-900 font-bold">Mr.Luân</span>
-                <a
-                  href="tel:0969798896"
-                  className="text-emerald-700 hover:text-emerald-800 font-extrabold tracking-wide hover:underline ml-0.5"
-                >
-                  09.6979.8896
-                </a>
+              <div className="hidden lg:flex items-center gap-2 mr-1">
+                <div className="flex items-center text-xs font-semibold text-emerald-950 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200/80 shadow-2xs gap-1.5">
+                  <span className="text-emerald-800 font-bold">Sáng lập:</span>
+                  <span className="text-slate-900 font-bold">Mr.Tưởng</span>
+                  <a
+                    href="tel:0917719794"
+                    className="text-emerald-700 hover:text-emerald-800 font-extrabold tracking-wide hover:underline ml-0.5"
+                  >
+                    09.1771.9794
+                  </a>
+                </div>
+                <div className="flex items-center text-xs font-semibold text-slate-700 bg-amber-50/90 px-3 py-1 rounded-full border border-amber-200/80 shadow-2xs gap-1.5">
+                  <span className="text-amber-800 font-bold">Design App:</span>
+                  <span className="text-slate-900 font-bold">Mr.Luân</span>
+                  <a
+                    href="tel:0969798896"
+                    className="text-emerald-700 hover:text-emerald-800 font-extrabold tracking-wide hover:underline ml-0.5"
+                  >
+                    09.6979.8896
+                  </a>
+                </div>
               </div>
 
               <div className="text-right hidden sm:block">
@@ -790,16 +802,30 @@ export default function Home() {
               </button>
             </div>
           ) : (
-            <div className="text-xs font-semibold text-slate-800 bg-gradient-to-r from-amber-50 to-orange-50 px-3.5 py-1.5 rounded-full border border-amber-200 shadow-2xs flex items-center gap-1.5">
-              <span className="text-amber-800 font-bold">Design App :</span>
-              <span className="text-slate-900 font-bold">Mr.Luân</span>
-              <span className="text-amber-300">•</span>
-              <a
-                href="tel:0969798896"
-                className="text-emerald-700 hover:text-emerald-800 font-extrabold tracking-wide hover:underline"
-              >
-                09.6979.8896
-              </a>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="text-xs font-semibold text-emerald-950 bg-gradient-to-r from-emerald-50 to-teal-50 px-3.5 py-1.5 rounded-full border border-emerald-200 shadow-2xs flex items-center gap-1.5">
+                <span className="text-emerald-800 font-bold">Sáng lập :</span>
+                <span className="text-slate-900 font-bold">Mr.Tưởng</span>
+                <span className="text-emerald-300">•</span>
+                <a
+                  href="tel:0917719794"
+                  className="text-emerald-700 hover:text-emerald-800 font-extrabold tracking-wide hover:underline"
+                >
+                  09.1771.9794
+                </a>
+              </div>
+
+              <div className="text-xs font-semibold text-slate-800 bg-gradient-to-r from-amber-50 to-orange-50 px-3.5 py-1.5 rounded-full border border-amber-200 shadow-2xs flex items-center gap-1.5">
+                <span className="text-amber-800 font-bold">Design App :</span>
+                <span className="text-slate-900 font-bold">Mr.Luân</span>
+                <span className="text-amber-300">•</span>
+                <a
+                  href="tel:0969798896"
+                  className="text-emerald-700 hover:text-emerald-800 font-extrabold tracking-wide hover:underline"
+                >
+                  09.6979.8896
+                </a>
+              </div>
             </div>
           )}
         </div>
