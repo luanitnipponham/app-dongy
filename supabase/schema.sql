@@ -83,8 +83,8 @@ CREATE TABLE IF NOT EXISTS public.wallets (
 CREATE TABLE IF NOT EXISTS public.bookings (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   booking_code VARCHAR(30) UNIQUE NOT NULL,
-  patient_id UUID REFERENCES public.profiles(id) NOT NULL,
-  practitioner_id UUID REFERENCES public.profiles(id), -- Nếu chọn đích danh sẽ lưu ngay ID Thầy thuốc đó
+  patient_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  practitioner_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE, -- Nếu chọn đích danh sẽ lưu ngay ID Thầy thuốc đó
   service_name TEXT NOT NULL,
   address TEXT NOT NULL,
   patient_phone VARCHAR(20) NOT NULL,
@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS public.bookings (
 CREATE TABLE IF NOT EXISTS public.wallet_transactions (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   wallet_id UUID REFERENCES public.wallets(id) ON DELETE CASCADE NOT NULL,
-  booking_id UUID REFERENCES public.bookings(id),
+  booking_id UUID REFERENCES public.bookings(id) ON DELETE CASCADE,
   amount NUMERIC(14, 2) NOT NULL,
   type tx_type NOT NULL,
   balance_after NUMERIC(14, 2) NOT NULL,

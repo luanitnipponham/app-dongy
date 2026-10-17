@@ -52,7 +52,10 @@ interface AdminViewProps {
   onVerifyPractitioner: (userId: string, isVerified: boolean) => void;
   onReassignDoctor: (bookingId: string, newDoctorId: string) => void;
   onCancelBookingByAdmin: (bookingId: string) => void;
-  onResetPassword: (userId: string, newPassword?: string) => void;
+  onResetPassword: (
+    userId: string,
+    newPassword?: string
+  ) => Promise<{ success: boolean; message?: string }> | void;
   onAdjustWallet: (userId: string, amount: number) => void;
   onUpdateCommissionRate: (userId: string, newRate: number) => void;
   onCreateUser?: (data: {
@@ -140,6 +143,7 @@ export default function AdminView({
   // Delete User modal state
   const [deletingUser, setDeletingUser] = useState<Profile | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   // Top-level metrics
   const unverifiedPractitioners = Object.values(practitioners).filter((p) => !p.is_verified);
@@ -623,6 +627,7 @@ export default function AdminView({
                   isVerified: true,
                   initialBalance: 500000,
                 });
+                setModalError(null);
                 setShowCreateModal(true);
               }}
               className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-purple-700 to-indigo-600 hover:from-purple-800 hover:to-indigo-700 text-white font-bold text-xs shadow-md shadow-purple-900/20 flex items-center justify-center gap-1.5 transition-all cursor-pointer shrink-0"
@@ -848,6 +853,7 @@ export default function AdminView({
                         type="button"
                         onClick={() => {
                           const p = practitioners[user.id];
+                          setModalError(null);
                           setEditingUser(user);
                           setEditForm({
                             fullName: user.full_name,
@@ -875,6 +881,7 @@ export default function AdminView({
                       <button
                         type="button"
                         onClick={() => {
+                          setModalError(null);
                           setResetModalUser(user);
                           setCustomPassword('');
                         }}
@@ -889,7 +896,10 @@ export default function AdminView({
                       {user.id !== currentUser.id && (
                         <button
                           type="button"
-                          onClick={() => setDeletingUser(user)}
+                          onClick={() => {
+                            setModalError(null);
+                            setDeletingUser(user);
+                          }}
                           className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
                           title="Xóa tài khoản"
                         >
@@ -1073,11 +1083,19 @@ export default function AdminView({
               </button>
             </div>
 
+            {modalError && (
+              <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-300 text-rose-800 text-xs font-bold flex items-start gap-2.5 animate-in fade-in">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+                <span>{modalError}</span>
+              </div>
+            )}
+
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
+                setModalError(null);
                 if (!createForm.fullName.trim() || !createForm.phone.trim()) {
-                  setAdminMsg({ type: 'error', text: 'Vui lòng nhập đầy đủ Họ tên và Số điện thoại!' });
+                  setModalError('Vui lòng nhập đầy đủ Họ tên và Số điện thoại!');
                   return;
                 }
 
@@ -1114,7 +1132,9 @@ export default function AdminView({
                     if (res.success) {
                       setAdminMsg({ type: 'success', text: res.message || 'Thêm tài khoản thành công!' });
                       setShowCreateModal(false);
+                      setModalError(null);
                     } else {
+                      setModalError(res.message || 'Có lỗi xảy ra khi tạo tài khoản!');
                       setAdminMsg({ type: 'error', text: res.message || 'Có lỗi xảy ra khi tạo tài khoản!' });
                     }
                   }
@@ -1342,18 +1362,29 @@ export default function AdminView({
               </div>
               <button
                 type="button"
-                onClick={() => setEditingUser(null)}
+                onClick={() => {
+                  setEditingUser(null);
+                  setModalError(null);
+                }}
                 className="text-slate-400 hover:text-slate-600 font-bold text-sm p-1"
               >
                 ✕
               </button>
             </div>
 
+            {modalError && (
+              <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-300 text-rose-800 text-xs font-bold flex items-start gap-2.5 animate-in fade-in">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+                <span>{modalError}</span>
+              </div>
+            )}
+
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
+                setModalError(null);
                 if (!editForm.fullName.trim() || !editForm.phone.trim()) {
-                  setAdminMsg({ type: 'error', text: 'Họ tên và Số điện thoại không được để trống!' });
+                  setModalError('Họ tên và Số điện thoại không được để trống!');
                   return;
                 }
 
@@ -1387,7 +1418,9 @@ export default function AdminView({
                     if (res.success) {
                       setAdminMsg({ type: 'success', text: res.message || 'Cập nhật thành công!' });
                       setEditingUser(null);
+                      setModalError(null);
                     } else {
+                      setModalError(res.message || 'Cập nhật thất bại!');
                       setAdminMsg({ type: 'error', text: res.message || 'Cập nhật thất bại!' });
                     }
                   }
@@ -1597,12 +1630,22 @@ export default function AdminView({
               </div>
               <button
                 type="button"
-                onClick={() => setResetModalUser(null)}
+                onClick={() => {
+                  setResetModalUser(null);
+                  setModalError(null);
+                }}
                 className="text-slate-400 hover:text-slate-600 font-bold text-sm"
               >
                 ✕
               </button>
             </div>
+
+            {modalError && (
+              <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-300 text-rose-800 text-xs font-bold flex items-start gap-2.5 animate-in fade-in">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+                <span>{modalError}</span>
+              </div>
+            )}
 
             <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-1">
               <div className="text-slate-600">Số điện thoại: <strong className="text-slate-900 font-mono">{resetModalUser.phone}</strong></div>
@@ -1613,18 +1656,31 @@ export default function AdminView({
               {/* Quick Reset 123456 */}
               <button
                 type="button"
-                onClick={() => {
-                  onResetPassword(resetModalUser.id, '123456');
-                  setAdminMsg({
-                    type: 'success',
-                    text: `Đã reset mật khẩu của ${resetModalUser.full_name} về '123456'!`,
-                  });
-                  setResetModalUser(null);
+                disabled={isSubmitting}
+                onClick={async () => {
+                  setModalError(null);
+                  setIsSubmitting(true);
+                  try {
+                    const res = await onResetPassword(resetModalUser.id, '123456');
+                    if (res && !res.success) {
+                      setModalError(res.message || 'Không thể đặt lại mật khẩu!');
+                      setAdminMsg({ type: 'error', text: res.message || 'Không thể đặt lại mật khẩu!' });
+                    } else {
+                      setAdminMsg({
+                        type: 'success',
+                        text: (res && res.message) || `Đã reset mật khẩu của ${resetModalUser.full_name} về '123456'!`,
+                      });
+                      setResetModalUser(null);
+                      setModalError(null);
+                    }
+                  } finally {
+                    setIsSubmitting(false);
+                  }
                 }}
                 className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer"
               >
                 <Sparkles className="w-3.5 h-3.5" />
-                1-Click: Reset về Mặc Định "123456"
+                {isSubmitting ? 'Đang xử lý...' : '1-Click: Reset về Mặc Định "123456"'}
               </button>
 
               <div className="relative flex py-1 items-center">
@@ -1647,27 +1703,42 @@ export default function AdminView({
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setResetModalUser(null)}
+                  onClick={() => {
+                    setResetModalUser(null);
+                    setModalError(null);
+                  }}
                   className="flex-1 py-2 rounded-xl text-slate-600 font-bold hover:bg-slate-100"
                 >
                   Đóng
                 </button>
                 <button
                   type="button"
-                  disabled={!customPassword.trim()}
-                  onClick={() => {
+                  disabled={!customPassword.trim() || isSubmitting}
+                  onClick={async () => {
                     if (customPassword.trim()) {
-                      onResetPassword(resetModalUser.id, customPassword.trim());
-                      setAdminMsg({
-                        type: 'success',
-                        text: `Đã đổi mật khẩu của ${resetModalUser.full_name} thành '${customPassword.trim()}'!`,
-                      });
-                      setResetModalUser(null);
+                      setModalError(null);
+                      setIsSubmitting(true);
+                      try {
+                        const res = await onResetPassword(resetModalUser.id, customPassword.trim());
+                        if (res && !res.success) {
+                          setModalError(res.message || 'Không thể đổi mật khẩu!');
+                          setAdminMsg({ type: 'error', text: res.message || 'Không thể đổi mật khẩu!' });
+                        } else {
+                          setAdminMsg({
+                            type: 'success',
+                            text: (res && res.message) || `Đã đổi mật khẩu của ${resetModalUser.full_name} thành '${customPassword.trim()}'!`,
+                          });
+                          setResetModalUser(null);
+                          setModalError(null);
+                        }
+                      } finally {
+                        setIsSubmitting(false);
+                      }
                     }
                   }}
                   className="flex-1 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 disabled:opacity-50 text-white font-bold shadow-md transition-colors"
                 >
-                  Xác Nhận Đổi
+                  {isSubmitting ? 'Đang đổi...' : 'Xác Nhận Đổi'}
                 </button>
               </div>
             </div>
@@ -1682,6 +1753,13 @@ export default function AdminView({
             <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
               <Trash2 className="w-6 h-6" />
             </div>
+
+            {modalError && (
+              <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-300 text-rose-800 text-xs font-bold flex items-start gap-2.5 animate-in fade-in">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+                <span>{modalError}</span>
+              </div>
+            )}
 
             <div className="text-center space-y-1">
               <h4 className="text-base font-black text-slate-900">Xác Nhận Xóa Tài Khoản?</h4>
@@ -1700,7 +1778,10 @@ export default function AdminView({
               <button
                 type="button"
                 disabled={isSubmitting}
-                onClick={() => setDeletingUser(null)}
+                onClick={() => {
+                  setDeletingUser(null);
+                  setModalError(null);
+                }}
                 className="flex-1 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-100 text-xs"
               >
                 Hủy Bỏ
@@ -1710,13 +1791,16 @@ export default function AdminView({
                 disabled={isSubmitting}
                 onClick={async () => {
                   if (onDeleteUser) {
+                    setModalError(null);
                     setIsSubmitting(true);
                     try {
                       const res = await onDeleteUser(deletingUser.id);
                       if (res.success) {
                         setAdminMsg({ type: 'success', text: res.message || 'Đã xóa người dùng thành công!' });
                         setDeletingUser(null);
+                        setModalError(null);
                       } else {
+                        setModalError(res.message || 'Không thể xóa người dùng!');
                         setAdminMsg({ type: 'error', text: res.message || 'Không thể xóa người dùng!' });
                       }
                     } finally {

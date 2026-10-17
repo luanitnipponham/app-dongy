@@ -712,23 +712,52 @@ export default function Home() {
     }
   };
 
-  // 14. Reset Password
   // 14. Reset Password (with custom or default password)
-  const handleResetPassword = (userId: string, newPassword?: string) => {
+  const handleResetPassword = async (
+    userId: string,
+    newPassword?: string
+  ): Promise<{ success: boolean; message?: string }> => {
     const pwd = newPassword && newPassword.trim() ? newPassword.trim() : '123456';
+    const targetUser = profiles.find((p) => p.id === userId);
+    const targetName = targetUser ? targetUser.full_name : 'người dùng';
+    const now = new Date().toISOString();
+
+    if (isLiveConnected) {
+      try {
+        const { error } = await supabase
+          .from('profiles')
+          .update({ password_hash: pwd, updated_at: now })
+          .eq('id', userId);
+
+        if (error) {
+          console.error('Supabase reset password error:', error);
+          return {
+            success: false,
+            message: `Lỗi đặt lại mật khẩu trên Supabase: ${error.message}`,
+          };
+        }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { success: false, message: `Lỗi kết nối cơ sở dữ liệu: ${msg}` };
+      }
+    }
+
     setProfiles((prev) =>
-      prev.map((p) => (p.id === userId ? { ...p, password_hash: pwd } : p))
+      prev.map((p) => (p.id === userId ? { ...p, password_hash: pwd, updated_at: now } : p))
     );
 
     if (currentUser?.id === userId) {
-      setCurrentUser((prev) => (prev ? { ...prev, password_hash: pwd } : null));
+      setCurrentUser((prev) => (prev ? { ...prev, password_hash: pwd, updated_at: now } : null));
     }
 
     if (isLiveConnected) {
-      supabase.from('profiles').update({ password_hash: pwd }).eq('id', userId).then(() => {
-        checkSupabaseConnection();
-      });
+      await checkSupabaseConnection();
     }
+
+    return {
+      success: true,
+      message: `Đã đặt lại mật khẩu của ${targetName} thành "${pwd}" thành công!`,
+    };
   };
 
   // 14b. Admin Create User
@@ -737,8 +766,13 @@ export default function Home() {
     practitioner?: Partial<PractitionerProfile>;
     initialBalance?: number;
   }): Promise<{ success: boolean; message?: string }> => {
-    if (profiles.some((p) => p.phone === data.profile.phone)) {
-      return { success: false, message: 'Số điện thoại này đã tồn tại trong hệ thống!' };
+    const trimmedPhone = data.profile.phone.trim();
+    const existing = profiles.find((p) => p.phone.trim() === trimmedPhone);
+    if (existing) {
+      return {
+        success: false,
+        message: `Số điện thoại "${trimmedPhone}" đã tồn tại trong hệ thống (tài khoản: ${existing.full_name})!`,
+      };
     }
 
     const newId =
@@ -749,9 +783,9 @@ export default function Home() {
 
     const newProfile: Profile = {
       id: newId,
-      phone: data.profile.phone,
+      phone: trimmedPhone,
       password_hash: data.profile.password_hash || '123456',
-      full_name: data.profile.full_name,
+      full_name: data.profile.full_name.trim(),
       avatar_url: data.profile.avatar_url || null,
       default_address: data.profile.default_address || null,
       role: data.profile.role,
@@ -759,8 +793,6 @@ export default function Home() {
       created_at: now,
       updated_at: now,
     };
-
-    setProfiles((prev) => [newProfile, ...prev]);
 
     let newPrac: PractitionerProfile | null = null;
     let newWallet: Wallet | null = null;
@@ -808,28 +840,62 @@ export default function Home() {
         locked_balance: 0,
         updated_at: now,
       };
-
-      setPractitioners((prev) => ({ ...prev, [newId]: newPrac! }));
-      setWallets((prev) => ({ ...prev, [newId]: newWallet! }));
     }
 
     if (isLiveConnected) {
       try {
         const { error: pErr } = await supabase.from('profiles').insert([newProfile]);
-        if (pErr) console.error('Supabase insert profile error:', pErr);
+        if (pErr) {
+          console.error('Supabase insert profile error:', pErr);
+          if (pErr.code === '23505') {
+            return {
+              success: false,
+              message: `Số điện thoại "${trimmedPhone}" đã tồn tại trong cơ sở dữ liệu Supabase!`,
+            };
+          }
+          return {
+            success: false,
+            message: `Lỗi tạo tài khoản trên Supabase: ${pErr.message}`,
+          };
+        }
 
         if (newPrac) {
           const { error: prErr } = await supabase.from('practitioner_profiles').insert([newPrac]);
-          if (prErr) console.error('Supabase insert practitioner error:', prErr);
+          if (prErr) {
+            console.error('Supabase insert practitioner error:', prErr);
+            return {
+              success: false,
+              message: `Lỗi tạo hồ sơ thầy thuốc trên Supabase: ${prErr.message}`,
+            };
+          }
         }
         if (newWallet) {
           const { error: wErr } = await supabase.from('wallets').insert([newWallet]);
-          if (wErr) console.error('Supabase insert wallet error:', wErr);
+          if (wErr) {
+            console.error('Supabase insert wallet error:', wErr);
+            return {
+              success: false,
+              message: `Lỗi tạo ví tín dụng trên Supabase: ${wErr.message}`,
+            };
+          }
         }
-        await checkSupabaseConnection();
-      } catch (e) {
+      } catch (e: unknown) {
         console.error('Supabase live create user error:', e);
+        const msg = e instanceof Error ? e.message : String(e);
+        return { success: false, message: `Lỗi kết nối cơ sở dữ liệu: ${msg}` };
       }
+    }
+
+    setProfiles((prev) => [newProfile, ...prev]);
+    if (newPrac) {
+      setPractitioners((prev) => ({ ...prev, [newId]: newPrac! }));
+    }
+    if (newWallet) {
+      setWallets((prev) => ({ ...prev, [newId]: newWallet! }));
+    }
+
+    if (isLiveConnected) {
+      await checkSupabaseConnection();
     }
 
     return {
@@ -846,8 +912,98 @@ export default function Home() {
       practitioner?: Partial<PractitionerProfile>;
     }
   ): Promise<{ success: boolean; message?: string }> => {
+    // 1. Kiểm tra số điện thoại bị trùng với tài khoản khác
+    if (data.profile.phone) {
+      const cleanPhone = data.profile.phone.trim();
+      const duplicateUser = profiles.find(
+        (p) => p.phone.trim() === cleanPhone && p.id !== userId
+      );
+      if (duplicateUser) {
+        return {
+          success: false,
+          message: `Số điện thoại "${cleanPhone}" đã được sử dụng bởi tài khoản "${duplicateUser.full_name}"! Vui lòng nhập số khác.`,
+        };
+      }
+    }
+
     const now = new Date().toISOString();
 
+    if (isLiveConnected) {
+      try {
+        if (data.profile && Object.keys(data.profile).length > 0) {
+          const profilePayload: Partial<Profile> = {
+            ...data.profile,
+            updated_at: now,
+          };
+          if (profilePayload.phone) {
+            profilePayload.phone = profilePayload.phone.trim();
+          }
+          if (profilePayload.full_name) {
+            profilePayload.full_name = profilePayload.full_name.trim();
+          }
+
+          const { error: pErr } = await supabase
+            .from('profiles')
+            .update(profilePayload)
+            .eq('id', userId);
+
+          if (pErr) {
+            console.error('Supabase update profile error:', pErr);
+            if (pErr.code === '23505') {
+              return {
+                success: false,
+                message: `Số điện thoại "${data.profile.phone}" đã bị trùng với tài khoản khác trong cơ sở dữ liệu! Vui lòng chọn số khác.`,
+              };
+            }
+            return {
+              success: false,
+              message: `Lỗi cập nhật Supabase: ${pErr.message}`,
+            };
+          }
+        }
+
+        if (data.practitioner && Object.keys(data.practitioner).length > 0) {
+          const { data: existingPrac, error: checkErr } = await supabase
+            .from('practitioner_profiles')
+            .select('id')
+            .eq('user_id', userId)
+            .maybeSingle();
+
+          if (checkErr) {
+            console.error('Check practitioner error:', checkErr);
+          }
+
+          if (existingPrac) {
+            const { error: prErr } = await supabase
+              .from('practitioner_profiles')
+              .update({ ...data.practitioner, updated_at: now })
+              .eq('user_id', userId);
+            if (prErr) {
+              return {
+                success: false,
+                message: `Lỗi cập nhật chuyên môn thầy thuốc: ${prErr.message}`,
+              };
+            }
+          } else {
+            const { error: prErr } = await supabase
+              .from('practitioner_profiles')
+              .insert([{ ...data.practitioner, user_id: userId, updated_at: now }]);
+            if (prErr) {
+              return {
+                success: false,
+                message: `Lỗi tạo chuyên môn thầy thuốc: ${prErr.message}`,
+              };
+            }
+          }
+        }
+      } catch (e: unknown) {
+        console.error('Supabase live update user error:', e);
+        const msg = e instanceof Error ? e.message : String(e);
+        return { success: false, message: `Lỗi kết nối cơ sở dữ liệu: ${msg}` };
+      }
+    }
+
+    // Cập nhật React state sau khi Supabase đã lưu thành công
     setProfiles((prev) =>
       prev.map((p) => {
         if (p.id === userId) {
@@ -877,35 +1033,7 @@ export default function Home() {
     }
 
     if (isLiveConnected) {
-      try {
-        if (data.profile && Object.keys(data.profile).length > 0) {
-          await supabase
-            .from('profiles')
-            .update({ ...data.profile, updated_at: now })
-            .eq('id', userId);
-        }
-        if (data.practitioner && Object.keys(data.practitioner).length > 0) {
-          const { data: existingPrac } = await supabase
-            .from('practitioner_profiles')
-            .select('id')
-            .eq('user_id', userId)
-            .maybeSingle();
-
-          if (existingPrac) {
-            await supabase
-              .from('practitioner_profiles')
-              .update({ ...data.practitioner, updated_at: now })
-              .eq('user_id', userId);
-          } else {
-            await supabase
-              .from('practitioner_profiles')
-              .insert([{ ...data.practitioner, user_id: userId, updated_at: now }]);
-          }
-        }
-        await checkSupabaseConnection();
-      } catch (e) {
-        console.error('Supabase live update user error:', e);
-      }
+      await checkSupabaseConnection();
     }
 
     return { success: true, message: 'Cập nhật thông tin tài khoản thành công!' };
@@ -931,8 +1059,25 @@ export default function Home() {
     if (hasActiveBookings) {
       return {
         success: false,
-        message: `Không thể xóa ${userName} vì đang có ca khám đang diễn ra hoặc chưa hoàn tất!`,
+        message: `Không thể xóa tài khoản ${userName} vì đang có ca khám đang diễn ra hoặc chưa hoàn tất!`,
       };
+    }
+
+    if (isLiveConnected) {
+      try {
+        const { error: delErr } = await supabase.from('profiles').delete().eq('id', userId);
+        if (delErr) {
+          console.error('Supabase delete user error:', delErr);
+          return {
+            success: false,
+            message: `Lỗi xóa tài khoản trên Supabase: ${delErr.message}`,
+          };
+        }
+      } catch (e: unknown) {
+        console.error('Supabase live delete user error:', e);
+        const msg = e instanceof Error ? e.message : String(e);
+        return { success: false, message: `Lỗi kết nối khi xóa: ${msg}` };
+      }
     }
 
     setProfiles((prev) => prev.filter((p) => p.id !== userId));
@@ -948,12 +1093,7 @@ export default function Home() {
     });
 
     if (isLiveConnected) {
-      try {
-        await supabase.from('profiles').delete().eq('id', userId);
-        await checkSupabaseConnection();
-      } catch (e) {
-        console.error('Supabase live delete user error:', e);
-      }
+      await checkSupabaseConnection();
     }
 
     return { success: true, message: `Đã xóa tài khoản ${userName} thành công.` };
