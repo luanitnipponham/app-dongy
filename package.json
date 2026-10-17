@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:layers": "node src/scripts/verify-7-layers.js"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

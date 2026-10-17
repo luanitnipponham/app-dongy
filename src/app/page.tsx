@@ -306,9 +306,33 @@ export default function Home() {
     }
   };
 
-  // 3. Create Booking
-  const handleCreateBooking = async (newBooking: Partial<Booking>) => {
-    const bookingId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : '55555555-5555-5555-5555-' + Date.now().toString().slice(-12).padStart(12, '0');
+  // 3. Create Booking (Chống spam / đúp đơn trùng lặp)
+  const handleCreateBooking = async (
+    newBooking: Partial<Booking>
+  ): Promise<{ success: boolean; message?: string; booking?: Booking }> => {
+    // Chặn trùng lặp: Nếu bệnh nhân vừa tạo 1 đơn có cùng dịch vụ và địa chỉ trong vòng 10 giây
+    const recentDuplicate = bookings.find(
+      (b) =>
+        b.patient_id === newBooking.patient_id &&
+        b.service_name === newBooking.service_name &&
+        b.address === newBooking.address &&
+        ['PENDING', 'CONFIRMED'].includes(b.status) &&
+        Date.now() - new Date(b.created_at).getTime() < 10000
+    );
+
+    if (recentDuplicate) {
+      return {
+        success: false,
+        message: `Đơn khám "${newBooking.service_name}" đã được ghi nhận trước đó (Mã: ${recentDuplicate.booking_code}). Vui lòng không bấm đặt trùng lặp!`,
+      };
+    }
+
+    const bookingId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : '55555555-5555-5555-5555-' + Date.now().toString().slice(-12).padStart(12, '0');
+    const now = new Date().toISOString();
+
     const bookingFull: Booking = {
       id: bookingId,
       booking_code: newBooking.booking_code || `KB-${Date.now().toString().slice(-6)}`,
@@ -320,25 +344,44 @@ export default function Home() {
       lat: newBooking.lat || 10.7769,
       lng: newBooking.lng || 106.7009,
       symptom_notes: newBooking.symptom_notes || '',
-      appointment_time: newBooking.appointment_time || new Date().toISOString(),
+      appointment_time: newBooking.appointment_time || now,
       service_fee: newBooking.service_fee || 400000,
-      travel_surcharge: newBooking.travel_surcharge || 30000,
+      travel_surcharge: newBooking.travel_surcharge ?? 0,
       commission_rate: newBooking.commission_rate || 15.0,
       commission_amount: newBooking.commission_amount || 60000,
       status: 'PENDING',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      created_at: now,
+      updated_at: now,
     };
-
-    setBookings((prev) => [bookingFull, ...prev]);
 
     if (isLiveConnected) {
       try {
-        await supabase.from('bookings').insert([bookingFull]);
-      } catch (e) {
+        const { error: bErr } = await supabase.from('bookings').insert([bookingFull]);
+        if (bErr) {
+          console.error('Supabase insert booking error:', bErr);
+          return {
+            success: false,
+            message: `Lỗi lưu ca khám lên cơ sở dữ liệu: ${bErr.message}`,
+          };
+        }
+      } catch (e: unknown) {
         console.error('Supabase insert booking error:', e);
+        const msg = e instanceof Error ? e.message : String(e);
+        return { success: false, message: `Lỗi kết nối cơ sở dữ liệu: ${msg}` };
       }
     }
+
+    setBookings((prev) => [bookingFull, ...prev.filter((b) => b.id !== bookingFull.id)]);
+
+    if (isLiveConnected) {
+      await checkSupabaseConnection();
+    }
+
+    return {
+      success: true,
+      message: `Đặt lịch thành công mã [${bookingFull.booking_code}]!`,
+      booking: bookingFull,
+    };
   };
 
   // 4. Accept Booking (RPC accept_booking_with_escrow logic)

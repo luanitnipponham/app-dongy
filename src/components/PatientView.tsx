@@ -33,10 +33,20 @@ interface PatientViewProps {
   practitioners: Record<string, PractitionerProfile>;
   profiles: Profile[];
   bookings: Booking[];
-  onCreateBooking: (newBooking: Partial<Booking>) => void;
+  onCreateBooking: (
+    newBooking: Partial<Booking>
+  ) => Promise<{ success: boolean; message?: string; booking?: Booking }> | void;
   onCancelBooking: (bookingId: string) => void;
   onSubmitReview: (bookingId: string, rating: number, review: string) => void;
 }
+
+const SERVICE_PRICES: Record<string, number> = {
+  'Châm cứu & Bấm huyệt đả thông kinh lạc': 400000,
+  'Điều trị đau vai gáy, thoát vị đĩa đệm tại nhà': 450000,
+  'Vật lý trị liệu & Phục hồi chức năng sau tai biến': 500000,
+  'Khám Nội tổng quát & Kê đơn thuốc thang YHCT': 500000,
+  'Xoa bóp dưỡng sinh & Chườm ngải cứu': 350000,
+};
 
 export default function PatientView({
   currentUser,
@@ -55,6 +65,7 @@ export default function PatientView({
   const [address, setAddress] = useState(currentUser.default_address || '');
   const [symptomNotes, setSymptomNotes] = useState('');
   const [isLocating, setIsLocating] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [formMsg, setFormMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Review modal state
@@ -95,8 +106,10 @@ export default function PatientView({
     }
   };
 
-  const handleSubmitBooking = (e: React.FormEvent) => {
+  const handleSubmitBooking = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+
     setFormMsg(null);
 
     if (!address.trim()) {
@@ -104,42 +117,51 @@ export default function PatientView({
       return;
     }
 
-    let serviceFee = 400000;
-    let commissionRate = 15.0;
+    setIsSubmitting(true);
+    try {
+      let serviceFee = SERVICE_PRICES[serviceName] || 400000;
+      let commissionRate = 15.0;
 
-    if (selectedPractitionerId && practitioners[selectedPractitionerId]) {
-      serviceFee = practitioners[selectedPractitionerId].base_service_fee;
-      commissionRate = practitioners[selectedPractitionerId].commission_rate;
+      if (selectedPractitionerId && practitioners[selectedPractitionerId]) {
+        serviceFee = practitioners[selectedPractitionerId].base_service_fee || serviceFee;
+        commissionRate = practitioners[selectedPractitionerId].commission_rate || 15.0;
+      }
+
+      const commissionAmount = Math.round((serviceFee * commissionRate) / 100);
+      const bookingCode = `KB-${Date.now().toString().slice(-6)}`;
+
+      const res = await onCreateBooking({
+        booking_code: bookingCode,
+        patient_id: currentUser.id,
+        practitioner_id: selectedPractitionerId,
+        service_name: serviceName,
+        address: address.trim(),
+        patient_phone: currentUser.phone,
+        lat: 10.7769,
+        lng: 106.6951,
+        symptom_notes: symptomNotes.trim(),
+        appointment_time: new Date(Date.now() + 2 * 3600 * 1000).toISOString(),
+        service_fee: serviceFee,
+        travel_surcharge: 0,
+        commission_rate: commissionRate,
+        commission_amount: commissionAmount,
+        status: 'PENDING',
+      });
+
+      if (res && !res.success) {
+        setFormMsg({ type: 'error', text: res.message || 'Không thể tạo đơn khám!' });
+      } else {
+        setFormMsg({
+          type: 'success',
+          text: (res && res.message) || `Đặt lịch thành công mã [${bookingCode}]! Vui lòng chờ Thầy thuốc xác nhận nhận ca.`,
+        });
+        setSymptomNotes('');
+        setSelectedPractitionerId(null);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    } finally {
+      setIsSubmitting(false);
     }
-
-    const commissionAmount = Math.round((serviceFee * commissionRate) / 100);
-
-    const bookingCode = `KB-${Date.now().toString().slice(-6)}`;
-
-    onCreateBooking({
-      booking_code: bookingCode,
-      patient_id: currentUser.id,
-      practitioner_id: selectedPractitionerId,
-      service_name: serviceName,
-      address: address.trim(),
-      patient_phone: currentUser.phone,
-      lat: 10.7769,
-      lng: 106.6951,
-      symptom_notes: symptomNotes.trim(),
-      appointment_time: new Date(Date.now() + 2 * 3600 * 1000).toISOString(),
-      service_fee: serviceFee,
-      travel_surcharge: 0,
-      commission_rate: commissionRate,
-      commission_amount: commissionAmount,
-      status: 'PENDING',
-    });
-
-    setFormMsg({
-      type: 'success',
-      text: `Đặt lịch thành công mã [${bookingCode}]! Vui lòng chờ Thầy thuốc xác nhận nhận ca.`,
-    });
-    setSymptomNotes('');
-    setSelectedPractitionerId(null);
   };
 
   const getStatusBadge = (status: Booking['status']) => {
@@ -510,9 +532,19 @@ export default function PatientView({
 
               <button
                 type="submit"
-                className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-sm shadow-lg shadow-emerald-600/25 transition-all flex items-center justify-center gap-2 active:scale-[0.99]"
+                disabled={isSubmitting}
+                className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-sm shadow-lg shadow-emerald-600/25 transition-all flex items-center justify-center gap-2 active:scale-[0.99] cursor-pointer"
               >
-                Xác Nhận Đặt Lịch Khám Tại Nhà <Send className="w-4 h-4" />
+                {isSubmitting ? (
+                  <>
+                    <Clock className="w-4 h-4 animate-spin" />
+                    Đang tạo đơn & kết nối Thầy thuốc...
+                  </>
+                ) : (
+                  <>
+                    Xác Nhận Đặt Lịch Khám Tại Nhà <Send className="w-4 h-4" />
+                  </>
+                )}
               </button>
             </form>
           </div>
