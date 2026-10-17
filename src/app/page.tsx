@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Stethoscope,
   ShieldCheck,
@@ -51,6 +51,10 @@ export default function Home() {
   const [dbTablesExist, setDbTablesExist] = useState<boolean>(false);
   const [connectionNote, setConnectionNote] = useState<string>('Khởi tạo');
   const [isCheckingDb, setIsCheckingDb] = useState<boolean>(false);
+
+  // Anti-duplicate booking lock (ref-based, survives re-renders)
+  const bookingLockRef = useRef<boolean>(false);
+  const lastBookingTimestampRef = useRef<number>(0);
   const [showDbModal, setShowDbModal] = useState<boolean>(false);
 
   // Check Supabase connection and tables
@@ -146,10 +150,21 @@ export default function Home() {
     }
   };
 
+  // Debounced realtime sync to prevent rapid re-fetches
+  const realtimeSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debouncedSync = useCallback(() => {
+    if (realtimeSyncTimerRef.current) {
+      clearTimeout(realtimeSyncTimerRef.current);
+    }
+    realtimeSyncTimerRef.current = setTimeout(() => {
+      checkSupabaseConnection();
+    }, 1000); // Wait 1s after last realtime event before re-fetching
+  }, []);
+
   useEffect(() => {
     checkSupabaseConnection();
 
-    // Supabase Realtime Listener for ALL tables
+    // Supabase Realtime Listener for ALL tables (debounced to prevent duplicate fetches)
     if (isSupabaseConfigured) {
       const channel = supabase
         .channel('public:realtime_sync')
@@ -158,7 +173,7 @@ export default function Home() {
           { event: '*', schema: 'public', table: 'profiles' },
           (payload) => {
             console.log('Realtime Profile Change detected:', payload);
-            checkSupabaseConnection();
+            debouncedSync();
           }
         )
         .on(
@@ -166,7 +181,7 @@ export default function Home() {
           { event: '*', schema: 'public', table: 'practitioner_profiles' },
           (payload) => {
             console.log('Realtime Practitioner Change detected:', payload);
-            checkSupabaseConnection();
+            debouncedSync();
           }
         )
         .on(
@@ -174,7 +189,7 @@ export default function Home() {
           { event: '*', schema: 'public', table: 'wallets' },
           (payload) => {
             console.log('Realtime Wallet Change detected:', payload);
-            checkSupabaseConnection();
+            debouncedSync();
           }
         )
         .on(
@@ -182,13 +197,16 @@ export default function Home() {
           { event: '*', schema: 'public', table: 'bookings' },
           (payload) => {
             console.log('Realtime Booking Change detected:', payload);
-            checkSupabaseConnection();
+            debouncedSync();
           }
         )
         .subscribe();
 
       return () => {
         supabase.removeChannel(channel);
+        if (realtimeSyncTimerRef.current) {
+          clearTimeout(realtimeSyncTimerRef.current);
+        }
       };
     }
   }, []);
@@ -306,18 +324,35 @@ export default function Home() {
     }
   };
 
-  // 3. Create Booking (Chống spam / đúp đơn trùng lặp)
-  const handleCreateBooking = async (
+  // 3. Create Booking (Chống spam / đúp đơn trùng lặp - Triple-lock protection)
+  const handleCreateBooking = useCallback(async (
     newBooking: Partial<Booking>
   ): Promise<{ success: boolean; message?: string; booking?: Booking }> => {
-    // Chặn trùng lặp: Nếu bệnh nhân vừa tạo 1 đơn có cùng dịch vụ và địa chỉ trong vòng 10 giây
+    // === LOCK 1: Ref-based mutex lock (survives re-renders, prevents concurrent calls) ===
+    if (bookingLockRef.current) {
+      return {
+        success: false,
+        message: 'Hệ thống đang xử lý đơn khám trước đó, vui lòng đợi...',
+      };
+    }
+
+    // === LOCK 2: Time-based throttle (minimum 5s between bookings) ===
+    const now = Date.now();
+    if (now - lastBookingTimestampRef.current < 5000) {
+      return {
+        success: false,
+        message: 'Vui lòng chờ ít nhất 5 giây trước khi đặt lịch tiếp theo.',
+      };
+    }
+
+    // === LOCK 3: Check existing bookings for duplicates ===
     const recentDuplicate = bookings.find(
       (b) =>
         b.patient_id === newBooking.patient_id &&
         b.service_name === newBooking.service_name &&
         b.address === newBooking.address &&
         ['PENDING', 'CONFIRMED'].includes(b.status) &&
-        Date.now() - new Date(b.created_at).getTime() < 10000
+        now - new Date(b.created_at).getTime() < 30000
     );
 
     if (recentDuplicate) {
@@ -327,62 +362,77 @@ export default function Home() {
       };
     }
 
-    const bookingId =
-      typeof crypto !== 'undefined' && crypto.randomUUID
-        ? crypto.randomUUID()
-        : '55555555-5555-5555-5555-' + Date.now().toString().slice(-12).padStart(12, '0');
-    const now = new Date().toISOString();
+    // Acquire lock
+    bookingLockRef.current = true;
+    lastBookingTimestampRef.current = now;
 
-    const bookingFull: Booking = {
-      id: bookingId,
-      booking_code: newBooking.booking_code || `KB-${Date.now().toString().slice(-6)}`,
-      patient_id: newBooking.patient_id!,
-      practitioner_id: newBooking.practitioner_id || null,
-      service_name: newBooking.service_name || 'Khám chữa bệnh tại nhà',
-      address: newBooking.address || '',
-      patient_phone: newBooking.patient_phone || '',
-      lat: newBooking.lat || 10.7769,
-      lng: newBooking.lng || 106.7009,
-      symptom_notes: newBooking.symptom_notes || '',
-      appointment_time: newBooking.appointment_time || now,
-      service_fee: newBooking.service_fee || 400000,
-      travel_surcharge: newBooking.travel_surcharge ?? 0,
-      commission_rate: newBooking.commission_rate || 15.0,
-      commission_amount: newBooking.commission_amount || 60000,
-      status: 'PENDING',
-      created_at: now,
-      updated_at: now,
-    };
+    try {
+      const bookingId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : '55555555-5555-5555-5555-' + Date.now().toString().slice(-12).padStart(12, '0');
+      const nowISO = new Date().toISOString();
 
-    if (isLiveConnected) {
-      try {
-        const { error: bErr } = await supabase.from('bookings').insert([bookingFull]);
-        if (bErr) {
-          console.error('Supabase insert booking error:', bErr);
-          return {
-            success: false,
-            message: `Lỗi lưu ca khám lên cơ sở dữ liệu: ${bErr.message}`,
-          };
+      const bookingFull: Booking = {
+        id: bookingId,
+        booking_code: newBooking.booking_code || `KB-${Date.now().toString().slice(-6)}`,
+        patient_id: newBooking.patient_id!,
+        practitioner_id: newBooking.practitioner_id || null,
+        service_name: newBooking.service_name || 'Khám chữa bệnh tại nhà',
+        address: newBooking.address || '',
+        patient_phone: newBooking.patient_phone || '',
+        lat: newBooking.lat || 10.7769,
+        lng: newBooking.lng || 106.7009,
+        symptom_notes: newBooking.symptom_notes || '',
+        appointment_time: newBooking.appointment_time || nowISO,
+        service_fee: newBooking.service_fee || 400000,
+        travel_surcharge: newBooking.travel_surcharge ?? 0,
+        commission_rate: newBooking.commission_rate || 15.0,
+        commission_amount: newBooking.commission_amount || 60000,
+        status: 'PENDING',
+        created_at: nowISO,
+        updated_at: nowISO,
+      };
+
+      if (isLiveConnected) {
+        try {
+          const { error: bErr } = await supabase.from('bookings').insert([bookingFull]);
+          if (bErr) {
+            console.error('Supabase insert booking error:', bErr);
+            return {
+              success: false,
+              message: `Lỗi lưu ca khám lên cơ sở dữ liệu: ${bErr.message}`,
+            };
+          }
+        } catch (e: unknown) {
+          console.error('Supabase insert booking error:', e);
+          const msg = e instanceof Error ? e.message : String(e);
+          return { success: false, message: `Lỗi kết nối cơ sở dữ liệu: ${msg}` };
         }
-      } catch (e: unknown) {
-        console.error('Supabase insert booking error:', e);
-        const msg = e instanceof Error ? e.message : String(e);
-        return { success: false, message: `Lỗi kết nối cơ sở dữ liệu: ${msg}` };
       }
+
+      // Update local state with deduplication by ID
+      setBookings((prev) => {
+        const filtered = prev.filter((b) => b.id !== bookingFull.id);
+        return [bookingFull, ...filtered];
+      });
+
+      // DO NOT call checkSupabaseConnection() here!
+      // Supabase Realtime will automatically trigger re-fetch via the channel listener.
+      // Calling it here caused race conditions where the same booking appeared multiple times.
+
+      return {
+        success: true,
+        message: `Đặt lịch thành công mã [${bookingFull.booking_code}]!`,
+        booking: bookingFull,
+      };
+    } finally {
+      // Release lock after a small delay to prevent rapid re-submission
+      setTimeout(() => {
+        bookingLockRef.current = false;
+      }, 2000);
     }
-
-    setBookings((prev) => [bookingFull, ...prev.filter((b) => b.id !== bookingFull.id)]);
-
-    if (isLiveConnected) {
-      await checkSupabaseConnection();
-    }
-
-    return {
-      success: true,
-      message: `Đặt lịch thành công mã [${bookingFull.booking_code}]!`,
-      booking: bookingFull,
-    };
-  };
+  }, [bookings, isLiveConnected]);
 
   // 4. Accept Booking (RPC accept_booking_with_escrow logic)
   const handleAcceptBooking = async (bookingId: string): Promise<boolean> => {
