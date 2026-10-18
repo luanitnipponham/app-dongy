@@ -578,10 +578,17 @@ export default function Home() {
     return true;
   };
 
-  // 6. Cancel Booking (NO PENALTY - Refund 100% locked fee)
-  const handleCancelBooking = (bookingId: string, cancelledByRole: 'PATIENT' | 'PRACTITIONER' | 'ADMIN') => {
+  // 6. Cancel Booking (NO PENALTY - Refund 100% locked fee - Immediate DB persistence)
+  const handleCancelBooking = async (
+    bookingId: string,
+    cancelledByRole: 'PATIENT' | 'PRACTITIONER' | 'ADMIN'
+  ): Promise<{ success: boolean; message?: string }> => {
     const target = bookings.find((b) => b.id === bookingId);
-    if (!target || target.status === 'COMPLETED') return;
+    if (!target) return { success: false, message: 'Không tìm thấy ca khám.' };
+    if (target.status === 'COMPLETED') return { success: false, message: 'Ca khám đã hoàn tất không thể hủy.' };
+
+    const newStatus =
+      cancelledByRole === 'PATIENT' ? 'CANCELLED_PATIENT' : 'CANCELLED_DOCTOR';
 
     // Refund locked commission if it was locked
     if (
@@ -616,9 +623,7 @@ export default function Home() {
       }
     }
 
-    const newStatus =
-      cancelledByRole === 'PATIENT' ? 'CANCELLED_PATIENT' : 'CANCELLED_DOCTOR';
-
+    // Cập nhật ngay lập tức bộ nhớ React để UI biến mất khỏi ca khám đang chạy
     setBookings((prev) =>
       prev.map((b) =>
         b.id === bookingId
@@ -627,17 +632,46 @@ export default function Home() {
       )
     );
 
-    // Live RPC to Supabase
-    if (isLiveConnected) {
+    // Lưu vĩnh viễn lên Supabase Cloud (await để bảo đảm hoàn tất trước khi trang reload hoặc sync)
+    if (isSupabaseConfigured) {
       try {
-        supabase.rpc('cancel_booking_and_refund_lock', {
+        const { error: rpcErr } = await supabase.rpc('cancel_booking_and_refund_lock', {
           p_booking_id: bookingId,
           p_cancelled_by_role: cancelledByRole,
         });
-      } catch (err) {
-        console.warn('Supabase RPC cancel error:', err);
+
+        if (rpcErr) {
+          console.warn('Supabase RPC cancel failed, attempting direct table update:', rpcErr);
+          const { error: directErr } = await supabase
+            .from('bookings')
+            .update({ status: newStatus, updated_at: new Date().toISOString() })
+            .eq('id', bookingId);
+
+          if (directErr) {
+            console.error('Supabase direct cancel error:', directErr);
+            return {
+              success: false,
+              message: `Lỗi cập nhật trạng thái hủy trên Supabase: ${directErr.message}`,
+            };
+          }
+        }
+      } catch (err: unknown) {
+        console.warn('Supabase cancel exception, attempting direct fallback:', err);
+        try {
+          await supabase
+            .from('bookings')
+            .update({ status: newStatus, updated_at: new Date().toISOString() })
+            .eq('id', bookingId);
+        } catch (fallbackErr) {
+          console.error('Fallback direct update failed:', fallbackErr);
+        }
       }
     }
+
+    return {
+      success: true,
+      message: `Đã hủy lịch khám ${target.booking_code} thành công (Không phạt cọc).`,
+    };
   };
 
   // 7. Check-in GPS

@@ -51,7 +51,9 @@ interface AdminViewProps {
   transactions: WalletTransaction[];
   onVerifyPractitioner: (userId: string, isVerified: boolean) => void;
   onReassignDoctor: (bookingId: string, newDoctorId: string) => void;
-  onCancelBookingByAdmin: (bookingId: string) => void;
+  onCancelBookingByAdmin: (
+    bookingId: string
+  ) => Promise<{ success: boolean; message?: string } | boolean | void> | void;
   onResetPassword: (
     userId: string,
     newPassword?: string
@@ -570,13 +572,13 @@ export default function AdminView({
                     {b.status !== 'COMPLETED' && !b.status.startsWith('CANCELLED') && (
                       <button
                         type="button"
-                        onClick={() => {
+                        onClick={async () => {
                           if (
                             confirm(
                               'Admin hủy ca khám này? Tiền tạm giữ (nếu có) sẽ được HOÀN TRẢ 100% cho Thầy thuốc (Không phạt cọc).'
                             )
                           ) {
-                            onCancelBookingByAdmin(b.id);
+                            await onCancelBookingByAdmin(b.id);
                             setAdminMsg({
                               type: 'success',
                               text: `Đã hủy đơn ${b.booking_code} và hoàn trả 100% phí tạm giữ cho Thầy thuốc.`,

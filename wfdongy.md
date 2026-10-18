@@ -9,7 +9,7 @@
      - **Thầy thuốc:** Khi đăng ký **BẮT BUỘC** phải nhập **Số Chứng chỉ hành nghề (`license_number`)**, **Nơi cấp (`issued_by`)**, và **Tải ảnh chụp Giấy phép hành nghề (`license_image_url`)**. Tài khoản mới tạo mặc định `is_verified = false` (Chờ Admin duyệt). Khi chưa được Admin duyệt, Thầy thuốc đăng nhập vào sẽ bị khóa ở màn hình *"Chờ thẩm định Chứng chỉ hành nghề"*, tuyệt đối không được bật Online hay nhận bệnh nhân.
      - **Admin:** Không cho phép tự đăng ký ngoài trang chủ. Admin có quyền cao nhất: Duyệt/Từ chối Chứng chỉ hành nghề, Reset mật khẩu cho User, Quản lý danh mục dịch vụ và Giám sát toàn hệ thống, xem trực tiếp ảnh chứng chỉ và bệnh án trên form quản trị .
   2. **Cô Lập Dữ Liệu 1-1 Giữa Bệnh Nhân & Thầy Thuốc (Strict Pairwise Isolation):**
-     - Khi **Bệnh nhân A** đặt lịch và chọn đích danh **Thầy thuốc X** (hoặc khi **Thầy thuốc X** nhận đơn tự do của **Bệnh nhân A**), **chỉ duy nhất Bệnh nhân A và Thầy thuốc X nhìn thấy thông tin ca khám và bệnh án của nhau**. Các Thầy thuốc khác (Y, Z) hoàn toàn không nhìn thấy đơn này.
+     - Khi **Bệnh nhân A đặt lịch khám thì hệ thống sẽ tự động gửi đơn cho tất cả các thầy thuốc đã đăng ký hợp lệ trên hệ thống (ưu tiên thầy thuốc chưa nhận book được lịch nào từ bệnh nhân) , say khi thầy thuốc nhận lệnh của bệnh nhân A gửi thì chỉ duy nhất Bệnh nhân A và Thầy thuốc X nhìn thấy thông tin ca khám và bệnh án của nhau. Các Thầy thuốc khác (Y, Z) hoàn toàn không nhìn thấy đơn này.
      - **Che thông tin chống "đi đêm" trước khi nhận ca:** Khi đơn đang ở trạng thái `PENDING` (chờ Thầy thuốc bấm Nhận ca), SĐT của bệnh nhân bị che (`0901***567`). Chỉ khi Thầy thuốc bấm **"Nhận Ca Khám"** (hệ thống đã tạm khóa phí chiết khấu nền tảng trong Ví Tín Dụng), toàn bộ SĐT, nút Gọi điện, nút Chat Zalo và Địa chỉ mới được mở khóa.
      - **Admin thấy toàn quyền (Full Visibility):** Admin thấy 100% mọi đơn đặt lịch, mọi trạng thái kết nối, bệnh án và biến động ví của tất cả Thầy thuốc và Bệnh nhân; đồng thời có quyền **Điều phối / Đổi Thầy thuốc phụ trách** nếu Thầy thuốc được chọn bận đột xuất.
   3. **Mô Hình Phí Chiết Khấu Nền Tảng Kiểu Grab Việt Nam (Không Phạt Cọc):**
@@ -105,11 +105,17 @@ CREATE TABLE IF NOT EXISTS public.wallets (
 );
 
 -- 6. Bảng Đặt lịch khám (Cô lập 1-1 giữa patient_id và practitioner_id)
+-- QUY TẮC HỦY LỊCH TRIỆT ĐỂ (KHÔNG LƯU VẾT ĐANG CHẠY):
+-- Khi Bệnh nhân bấm "Hủy lịch khám (Không phạt cọc)", hệ thống thực thi cập nhật ngay lập tức:
+-- 1. Trạng thái (status) chuyển vĩnh viễn sang 'CANCELLED_PATIENT' trên DB Supabase (và hoàn trả 100% phí tạm giữ cho Thầy thuốc nếu đơn đã nhận).
+-- 2. Đơn hủy được gỡ bỏ dứt điểm khỏi danh sách ca khám đang hoạt động (activeBookings), không còn chạy lệnh.
+-- 3. Khi Bệnh nhân thoát app, F5 tải lại trang, hoặc đăng nhập/vào lại hệ thống sau đó: Lệnh khám đã hủy triệt để, không bao giờ còn hiển thị ở trạng thái đang đặt/đang chạy.
+-- 4. Đơn đã hủy chỉ xuất hiện ở mục "Sổ Bệnh Án & Đánh Giá" (pastBookings) với huy hiệu "Bệnh nhân đã hủy".
 CREATE TABLE IF NOT EXISTS public.bookings (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   booking_code VARCHAR(30) UNIQUE NOT NULL,
   patient_id UUID REFERENCES public.profiles(id) NOT NULL,
-  practitioner_id UUID REFERENCES public.profiles(id), -- Nếu chọn đích danh sẽ lưu ngay ID Thầy thuốc đó
+  practitioner_id UUID REFERENCES public.profiles(id), -- NULL khi tự động tìm thầy thuốc, có ID khi chọn đích danh hoặc khi thầy thuốc nhận ca
   service_name TEXT NOT NULL,
   address TEXT NOT NULL,
   patient_phone VARCHAR(20) NOT NULL,
@@ -118,12 +124,13 @@ CREATE TABLE IF NOT EXISTS public.bookings (
   symptom_notes TEXT,
   appointment_time TIMESTAMPTZ NOT NULL,
   
-  -- Tài chính minh bạch kiểu Grab
-  service_fee NUMERIC(12, 2) NOT NULL,                 -- Giá khám dịch vụ
-  travel_surcharge NUMERIC(12, 2) DEFAULT 0,           -- Phụ phí xăng xe/ngoài giờ (Thầy thuốc hưởng 100%)
+  -- Tài chính minh bạch kiểu Grab (Loại bỏ mục phụ phí xăng xe theo yêu cầu)
+  service_fee NUMERIC(12, 2) NOT NULL,                 -- Giá khám dịch vụ (từ bảng giá niêm yết)
+  travel_surcharge NUMERIC(12, 2) DEFAULT 0,           -- Phụ phí xăng xe (mặc định 0đ - đã bãi bỏ mục chọn phụ phí)
   commission_rate NUMERIC(5, 2) NOT NULL DEFAULT 15.0, -- % Phí nền tảng (Chỉ tính trên service_fee)
   commission_amount NUMERIC(12, 2) NOT NULL,           -- Số tiền phí nền tảng Admin thu
   
+  -- Trạng thái: PENDING, CONFIRMED, ON_THE_WAY, IN_PROGRESS, COMPLETED, CANCELLED_PATIENT, CANCELLED_DOCTOR
   status booking_status DEFAULT 'PENDING'::booking_status NOT NULL,
   
   -- Bệnh án điện tử 3 mục chuẩn Y khoa
@@ -458,11 +465,11 @@ Bạn hãy copy **lần lượt từng Prompt dưới đây** dán vào khung ch
 > - **Quy tắc Cô lập 1-1 bắt buộc:** Mọi truy vấn lấy danh sách lịch khám và sổ bệnh án của Bệnh nhân chỉ được lấy các dòng có `patient_id === currentUser.id`. Bệnh nhân A tuyệt đối không nhìn thấy lịch khám hay bệnh án của Bệnh nhân B.
 > - Giao diện gồm 2 tab:
 >   1. **Tab Đặt Lịch & Kết Nối Thầy Thuốc:**
->      - Bước 1: Hiển thị danh sách các Thầy thuốc đã được Admin duyệt Chứng chỉ hành nghề (`is_verified === true` và `is_online === true`) gồm Tên, Chuyên khoa, Số CCHN đã xác thực, Giá khám, Điểm sao. Cho phép Bệnh nhân bấm **'Chọn đích danh Thầy thuốc này'** (gán `practitioner_id` = ID Thầy thuốc được chọn) HOẶC chọn **'Để hệ thống tự tìm Thầy thuốc gần nhất'** (`practitioner_id = null`).
->      - Bước 2: Chọn dịch vụ, nhập địa chỉ nhà (có nút lấy tọa độ GPS hiện tại), nhập triệu chứng, chọn phụ phí xăng xe/ngoài giờ (nếu có) và bấm Đặt lịch.
->      - Bước 3: Danh sách Ca khám đang diễn ra của Bệnh nhân: Hiển thị rõ trạng thái, thông tin Thầy thuốc phụ trách, nút **'Gọi điện cho Thầy thuốc' (`tel:`)**, nút **'Nhắn Zalo' (`https://zalo.me/`)**, và nút Hủy lịch (gọi RPC `cancel_booking_and_refund_lock` hoàn trả 100% phí tạm giữ cho Thầy thuốc).
+>      - Bước 1: Hiển thị danh sách các Thầy thuốc đã được Admin duyệt Chứng chỉ hành nghề (`is_verified === true` và `is_online === true`) gồm Tên, Chuyên khoa, Số CCHN đã xác thực, Giá khám, Điểm sao. Cho phép Bệnh nhân bấm **'Chọn đích danh Thầy thuốc này'** (gán `practitioner_id` = ID Thầy thuốc được chọn) HOẶC chọn mặc định **'Để hệ thống tự tìm Thầy thuốc gần nhất'** (`practitioner_id = null`, hệ thống tự phát đơn đến tất cả Thầy thuốc hợp lệ).
+>      - Bước 2: Chọn dịch vụ y học cổ truyền theo bảng giá niêm yết, chọn ngày & giờ hẹn khám, nhập địa chỉ nhà (có nút lấy tọa độ GPS hiện tại), nhập triệu chứng hiện tại (đã bãi bỏ phụ phí xăng xe). Bảng kê tài chính Grab minh bạch hiển thị giá dịch vụ và phí nền tảng.
+>      - Bước 3: Danh sách Ca khám đang diễn ra của Bệnh nhân: Hiển thị rõ trạng thái, thông tin Thầy thuốc phụ trách, nút **'Gọi điện cho Thầy thuốc' (`tel:`)**, nút **'Nhắn Zalo' (`https://zalo.me/`)**, và nút **Hủy lịch khám (Không phạt cọc)**. Khi Bệnh nhân bấm Hủy, hệ thống xử lý hủy dứt điểm tức thì (cập nhật vĩnh viễn lên Supabase DB `status = 'CANCELLED_PATIENT'` và hoàn 100% tiền tạm giữ cho Thầy thuốc nếu có), gỡ bỏ hoàn toàn khỏi danh sách ca đang chạy. Khi thoát ra vào lại hoặc F5 tải lại trang, tuyệt đối không bị hiện lại lệnh đang đặt. Đơn đã hủy chuyển sang Tab 2.
 >   2. **Tab Sổ Bệnh Án Điện Tử & Đánh Giá:**
->      - Tra cứu lịch sử khám của bản thân, xem chi tiết **Bệnh án 3 mục** do Thầy thuốc ghi (1. Chẩn đoán, 2. Thủ thuật & Đơn thuốc, 3. Lời dặn & Hẹn tái khám) và cho phép chấm điểm 1-5 sao cho Thầy thuốc."
+>      - Tra cứu lịch sử khám của bản thân, xem chi tiết **Bệnh án 3 mục** do Thầy thuốc ghi (1. Chẩn đoán, 2. Thủ thuật & Đơn thuốc, 3. Lời dặn & Hẹn tái khám), xem các đơn đã hủy của mình và cho phép chấm điểm 1-5 sao cho Thầy thuốc sau khi khám xong."
 
 ### [PROMPT BƯỚC 4]: Xây dựng Phân hệ Thầy Thuốc (`src/components/PractitionerView.tsx`) - Mở Google Maps Miễn Phí & Ví Kiểu Grab
 > "Hãy tạo Component Giao diện Mobile cho Thầy thuốc tại `src/components/PractitionerView.tsx`:

@@ -60,7 +60,9 @@ interface PractitionerViewProps {
     treatment: string,
     advice: string
   ) => Promise<boolean>;
-  onCancelBooking: (bookingId: string) => void;
+  onCancelBooking: (
+    bookingId: string
+  ) => Promise<{ success: boolean; message?: string } | boolean | void> | void;
   onDepositWallet: (amount: number) => void;
   onToggleOnline: (isOnline: boolean) => void;
 }
@@ -582,13 +584,13 @@ export default function PractitionerView({
                     <div className="pt-1 flex justify-end">
                       <button
                         type="button"
-                        onClick={() => {
+                        onClick={async () => {
                           if (
                             confirm(
                               'Bạn có việc bận đột xuất muốn hủy ca này? Hệ thống sẽ HOÀN TRẢ 100% phí tạm giữ về ví của bạn (Không phạt cọc).'
                             )
                           ) {
-                            onCancelBooking(b.id);
+                            await onCancelBooking(b.id);
                           }
                         }}
                         className="text-[11px] text-slate-400 hover:text-rose-600 flex items-center gap-1 transition-colors"

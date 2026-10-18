@@ -20,6 +20,8 @@ import {
   Activity,
   Send,
   Sparkles,
+  User,
+  ChevronsUpDown,
 } from 'lucide-react';
 import { Profile, PractitionerProfile, Booking } from '@/types/database';
 import {
@@ -36,7 +38,9 @@ interface PatientViewProps {
   onCreateBooking: (
     newBooking: Partial<Booking>
   ) => Promise<{ success: boolean; message?: string; booking?: Booking }> | void;
-  onCancelBooking: (bookingId: string) => void;
+  onCancelBooking: (
+    bookingId: string
+  ) => Promise<{ success: boolean; message?: string } | boolean | void> | void;
   onSubmitReview: (bookingId: string, rating: number, review: string) => void;
 }
 
@@ -47,6 +51,7 @@ const SERVICE_PRICES: Record<string, number> = {
   'Khám Nội tổng quát & Kê đơn thuốc thang YHCT': 500000,
   'Xoa bóp dưỡng sinh & Chườm ngải cứu': 350000,
 };
+
 
 export default function PatientView({
   currentUser,
@@ -59,19 +64,72 @@ export default function PatientView({
 }: PatientViewProps) {
   const [activeTab, setActiveTab] = useState<'BOOKING' | 'RECORDS'>('BOOKING');
 
-  // Booking form state
-  const [selectedPractitionerId] = useState<string | null>(null);
+  // ======== BOOKING FORM STATE ========
+  // Bước 1: Chọn Thầy thuốc
+  const [doctorSelectionMode, setDoctorSelectionMode] = useState<'AUTO' | 'MANUAL'>('AUTO');
+  const [selectedPractitionerId, setSelectedPractitionerId] = useState<string | null>(null);
+
+  // Bước 2: Chọn dịch vụ, nhập địa chỉ, triệu chứng
   const [serviceName, setServiceName] = useState('Châm cứu & Bấm huyệt đả thông kinh lạc');
   const [address, setAddress] = useState(currentUser.default_address || '');
   const [symptomNotes, setSymptomNotes] = useState('');
   const [isLocating, setIsLocating] = useState(false);
+
+  // Ngày giờ hẹn khám
+  const [appointmentDate, setAppointmentDate] = useState(() => {
+    const d = new Date(Date.now() + 2 * 3600 * 1000);
+    return d.toISOString().slice(0, 10); // YYYY-MM-DD
+  });
+  const [appointmentTime, setAppointmentTime] = useState(() => {
+    const d = new Date(Date.now() + 2 * 3600 * 1000);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  });
+
+
+  // Form submission
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [formMsg, setFormMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Review modal state
   const [reviewBookingId, setReviewBookingId] = useState<string | null>(null);
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewComment, setReviewComment] = useState('');
+
+  // Xử lý hủy lịch khám triệt để (Không phạt cọc - Ngăn tải lại xuất hiện lệnh cũ)
+  const handleCancelBookingClick = async (bookingId: string, bookingCode: string) => {
+    if (cancellingId) return;
+    if (
+      !confirm(
+        `Bạn chắc chắn muốn hủy lịch khám [${bookingCode}]? Lệnh khám sẽ bị hủy ngay lập tức và chuyển vào Sổ Bệnh Án (Không phạt cọc).`
+      )
+    ) {
+      return;
+    }
+
+    setCancellingId(bookingId);
+    setFormMsg(null);
+
+    try {
+      const res = await onCancelBooking(bookingId);
+      if (res && typeof res === 'object' && 'success' in res && !res.success) {
+        setFormMsg({
+          type: 'error',
+          text: res.message || 'Không thể hủy lịch khám lúc này. Vui lòng thử lại!',
+        });
+      } else {
+        setFormMsg({
+          type: 'success',
+          text: `Đã hủy triệt để ca khám [${bookingCode}]! Lệnh khám đã được gỡ bỏ khỏi ca đang chạy và lưu trữ trong mục "Sổ Bệnh Án & Đánh Giá".`,
+        });
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Lỗi khi hủy lịch khám.';
+      setFormMsg({ type: 'error', text: msg });
+    } finally {
+      setCancellingId(null);
+    }
+  };
 
   // 1-1 Isolation: STRICT FILTERING FOR THIS PATIENT ONLY
   const myBookings = bookings.filter((b) => b.patient_id === currentUser.id);
@@ -123,6 +181,20 @@ export default function PatientView({
       return;
     }
 
+    // Validate ngày giờ hẹn khám
+    const selectedDateTime = new Date(`${appointmentDate}T${appointmentTime}:00`);
+    const now = new Date();
+    if (selectedDateTime <= now) {
+      setFormMsg({ type: 'error', text: 'Ngày giờ hẹn khám phải sau thời điểm hiện tại. Vui lòng chọn lại.' });
+      return;
+    }
+
+    // Validate chọn thầy thuốc đích danh
+    if (doctorSelectionMode === 'MANUAL' && !selectedPractitionerId) {
+      setFormMsg({ type: 'error', text: 'Vui lòng chọn một Thầy thuốc hoặc chuyển sang chế độ Tự động tìm.' });
+      return;
+    }
+
     // Acquire both locks immediately
     setIsSubmitting(true);
     submittingLockRef.current = true;
@@ -131,21 +203,22 @@ export default function PatientView({
       // Giá dịch vụ luôn lấy từ bảng giá SERVICE_PRICES theo dịch vụ đã chọn
       const serviceFee = SERVICE_PRICES[serviceName] || 400000;
       const commissionRate = 15.0;
-
       const commissionAmount = Math.round((serviceFee * commissionRate) / 100);
       const bookingCode = `KB-${Date.now().toString().slice(-6)}`;
+
+      const practitionerIdToSend = doctorSelectionMode === 'MANUAL' ? selectedPractitionerId : null;
 
       const res = await onCreateBooking({
         booking_code: bookingCode,
         patient_id: currentUser.id,
-        practitioner_id: null,
+        practitioner_id: practitionerIdToSend,
         service_name: serviceName,
         address: address.trim(),
         patient_phone: currentUser.phone,
         lat: 10.7769,
         lng: 106.6951,
         symptom_notes: symptomNotes.trim(),
-        appointment_time: new Date(Date.now() + 2 * 3600 * 1000).toISOString(),
+        appointment_time: selectedDateTime.toISOString(),
         service_fee: serviceFee,
         travel_surcharge: 0,
         commission_rate: commissionRate,
@@ -205,6 +278,12 @@ export default function PatientView({
     const detail = practitioners[doctorId];
     return { prof, detail };
   };
+
+  // Tính toán tài chính minh bạch kiểu Grab
+  const currentServiceFee = SERVICE_PRICES[serviceName] || 400000;
+  const commissionRate = 15.0;
+  const commissionAmount = Math.round((currentServiceFee * commissionRate) / 100);
+  const totalPatientPay = currentServiceFee;
 
   return (
     <div className="w-full max-w-2xl mx-auto px-4 pb-20">
@@ -356,18 +435,27 @@ export default function PatientView({
                       </div>
                     )}
 
-                    {/* Cancel Action (Hoàn 100% tiền tạm giữ cho Thầy thuốc - Không phạt cọc) */}
+                    {/* Cancel Action (Hoàn 100% tiền tạm giữ cho Thầy thuốc - Không phạt cọc - Hủy triệt để) */}
                     <div className="pt-2 flex justify-end">
                       <button
                         type="button"
-                        onClick={() => {
-                          if (confirm('Bạn chắc chắn muốn hủy lịch khám này? Phí nền tảng sẽ được hoàn trả 100% cho Thầy thuốc.')) {
-                            onCancelBooking(b.id);
-                          }
-                        }}
-                        className="text-xs text-rose-600 hover:text-rose-800 font-semibold flex items-center gap-1 px-3 py-1.5 rounded-xl hover:bg-rose-50 transition-all"
+                        disabled={cancellingId === b.id}
+                        onClick={() => handleCancelBookingClick(b.id, b.booking_code)}
+                        className={`text-xs font-semibold flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all ${
+                          cancellingId === b.id
+                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                            : 'text-rose-600 hover:text-rose-800 hover:bg-rose-50 border border-rose-200'
+                        }`}
                       >
-                        <XCircle className="w-3.5 h-3.5" /> Hủy lịch khám (Không phạt cọc)
+                        {cancellingId === b.id ? (
+                          <>
+                            <Clock className="w-3.5 h-3.5 animate-spin" /> Đang hủy lịch khám...
+                          </>
+                        ) : (
+                          <>
+                            <XCircle className="w-3.5 h-3.5" /> Hủy lịch khám (Không phạt cọc)
+                          </>
+                        )}
                       </button>
                     </div>
                   </div>
@@ -376,7 +464,7 @@ export default function PatientView({
             </div>
           )}
 
-          {/* Form Create New Booking */}
+          {/* ====== FORM ĐẶT LỊCH KHÁM HOÀN CHỈNH ====== */}
           <div className="p-5 sm:p-6 rounded-3xl bg-white border border-slate-200 shadow-xl shadow-slate-200/50">
             <h3 className="text-base font-extrabold text-slate-800 flex items-center gap-2 mb-4">
               <Calendar className="w-5 h-5 text-emerald-600" />
@@ -401,49 +489,206 @@ export default function PatientView({
             )}
 
             <form onSubmit={handleSubmitBooking} className="space-y-4">
-              {/* Thông báo hệ thống tự động tìm Thầy thuốc */}
-              <div className="p-3.5 rounded-2xl border-2 border-emerald-600 bg-emerald-50/50 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
-                    <Sparkles className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="text-xs sm:text-sm font-bold text-slate-900">
-                      Hệ thống tự động tìm Thầy thuốc gần nhất
+
+              {/* ===== BƯỚC 1: CHỌN THẦY THUỐC ===== */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                  <span className="inline-flex items-center gap-1.5">
+                    <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
+                    Bước 1: Chọn Thầy Thuốc
+                  </span>
+                </label>
+
+                {/* Toggle: Tự động / Chọn đích danh */}
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDoctorSelectionMode('AUTO');
+                      setSelectedPractitionerId(null);
+                    }}
+                    className={`p-3 rounded-2xl border-2 text-left transition-all ${
+                      doctorSelectionMode === 'AUTO'
+                        ? 'border-emerald-600 bg-emerald-50/50 shadow-sm'
+                        : 'border-slate-200 bg-slate-50 hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                          doctorSelectionMode === 'AUTO' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                        }`}>
+                          <Sparkles className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-slate-900">Tự động tìm</div>
+                          <div className="text-[10px] text-slate-500">Thầy thuốc gần nhất</div>
+                        </div>
+                      </div>
+                      <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                        doctorSelectionMode === 'AUTO' ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-slate-300'
+                      }`}>
+                        {doctorSelectionMode === 'AUTO' && <CheckCircle2 className="w-3.5 h-3.5" />}
+                      </div>
                     </div>
-                    <div className="text-[11px] text-slate-500">
-                      Ưu tiên thầy thuốc có Chứng chỉ hành nghề đang online trong bán kính 5km
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setDoctorSelectionMode('MANUAL')}
+                    className={`p-3 rounded-2xl border-2 text-left transition-all ${
+                      doctorSelectionMode === 'MANUAL'
+                        ? 'border-emerald-600 bg-emerald-50/50 shadow-sm'
+                        : 'border-slate-200 bg-slate-50 hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                          doctorSelectionMode === 'MANUAL' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                        }`}>
+                          <User className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-slate-900">Chọn đích danh</div>
+                          <div className="text-[10px] text-slate-500">Thầy thuốc uy tín</div>
+                        </div>
+                      </div>
+                      <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                        doctorSelectionMode === 'MANUAL' ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-slate-300'
+                      }`}>
+                        {doctorSelectionMode === 'MANUAL' && <CheckCircle2 className="w-3.5 h-3.5" />}
+                      </div>
                     </div>
+                  </button>
+                </div>
+
+                {/* Danh sách Thầy thuốc (khi chọn đích danh) */}
+                {doctorSelectionMode === 'MANUAL' && (
+                  <div className="space-y-2 max-h-64 overflow-y-auto rounded-2xl border border-slate-200 p-2 bg-slate-50/50">
+                    {verifiedDoctors.length === 0 ? (
+                      <div className="p-4 text-center text-xs text-slate-500">
+                        <User className="w-8 h-8 text-slate-300 mx-auto mb-1" />
+                        Chưa có Thầy thuốc nào đang online. Vui lòng chọn chế độ Tự động.
+                      </div>
+                    ) : (
+                      verifiedDoctors.map((doc) => {
+                        const docProfile = profiles.find((p) => p.id === doc.user_id);
+                        if (!docProfile) return null;
+                        const isSelected = selectedPractitionerId === doc.user_id;
+                        return (
+                          <button
+                            key={doc.user_id}
+                            type="button"
+                            onClick={() => setSelectedPractitionerId(doc.user_id)}
+                            className={`w-full p-3 rounded-xl border-2 text-left transition-all flex items-center justify-between gap-3 ${
+                              isSelected
+                                ? 'border-emerald-500 bg-emerald-50 shadow-sm'
+                                : 'border-transparent bg-white hover:border-slate-200 hover:shadow-xs'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3 min-w-0 flex-1">
+                              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-600 to-teal-600 text-white font-bold flex items-center justify-center text-xs shadow shrink-0">
+                                {docProfile.full_name.slice(0, 2)}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="text-xs font-bold text-slate-900 flex items-center gap-1 truncate">
+                                  {docProfile.full_name}
+                                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                </div>
+                                <div className="text-[10px] text-slate-500 truncate">
+                                  {doc.specialties?.join(', ') || 'YHCT'}
+                                </div>
+                                <div className="text-[10px] text-emerald-700 font-mono truncate">
+                                  CCHN: {doc.license_number}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <div className="flex items-center gap-0.5 text-amber-500 justify-end">
+                                <Star className="w-3 h-3 fill-amber-400" />
+                                <span className="text-[10px] font-bold text-slate-700">{doc.rating_avg}</span>
+                              </div>
+                              <div className="text-[10px] font-bold text-emerald-700">{formatVND(doc.base_service_fee)}</div>
+                              <div className={`w-4 h-4 rounded-full border-2 mt-1 ml-auto flex items-center justify-center ${
+                                isSelected ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-slate-300'
+                              }`}>
+                                {isSelected && <CheckCircle2 className="w-3 h-3" />}
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })
+                    )}
                   </div>
-                </div>
-                <div className="w-5 h-5 rounded-full border-2 flex items-center justify-center border-emerald-600 bg-emerald-600 text-white">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                </div>
+                )}
               </div>
 
-              {/* Chọn dịch vụ */}
+              {/* ===== BƯỚC 2: CHỌN DỊCH VỤ ===== */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Chọn dịch vụ y học cổ truyền
+                  <span className="inline-flex items-center gap-1.5">
+                    <HeartPulse className="w-3.5 h-3.5 text-emerald-600" />
+                    Bước 2: Chọn dịch vụ y học cổ truyền
+                  </span>
                 </label>
                 <select
                   value={serviceName}
                   onChange={(e) => setServiceName(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs sm:text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 >
-                  <option value="Châm cứu & Bấm huyệt đả thông kinh lạc">Châm cứu & Bấm huyệt đả thông kinh lạc (400.000đ)</option>
-                  <option value="Điều trị đau vai gáy, thoát vị đĩa đệm tại nhà">Điều trị đau vai gáy, thoát vị đĩa đệm tại nhà (450.000đ)</option>
-                  <option value="Vật lý trị liệu & Phục hồi chức năng sau tai biến">Vật lý trị liệu & Phục hồi chức năng sau tai biến (500.000đ)</option>
-                  <option value="Khám Nội tổng quát & Kê đơn thuốc thang YHCT">Khám Nội tổng quát & Kê đơn thuốc thang YHCT (500.000đ)</option>
-                  <option value="Xoa bóp dưỡng sinh & Chườm ngải cứu">Xoa bóp dưỡng sinh & Chườm ngải cứu (350.000đ)</option>
+                  {Object.entries(SERVICE_PRICES).map(([name, price]) => (
+                    <option key={name} value={name}>
+                      {name} ({formatVND(price)})
+                    </option>
+                  ))}
                 </select>
               </div>
 
-              {/* Address with GPS */}
+              {/* ===== NGÀY & GIỜ HẸN KHÁM ===== */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-emerald-600" />
+                    Bước 3: Chọn ngày & giờ hẹn khám *
+                  </span>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-500 mb-0.5 font-semibold">Ngày khám</label>
+                    <input
+                      type="date"
+                      value={appointmentDate}
+                      onChange={(e) => setAppointmentDate(e.target.value)}
+                      min={new Date().toISOString().slice(0, 10)}
+                      required
+                      className="w-full px-3 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-500 mb-0.5 font-semibold">Giờ khám</label>
+                    <input
+                      type="time"
+                      value={appointmentTime}
+                      onChange={(e) => setAppointmentTime(e.target.value)}
+                      required
+                      className="w-full px-3 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
+                    />
+                  </div>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1 italic">
+                  Vui lòng đặt trước ít nhất 1 giờ để Thầy thuốc chuẩn bị di chuyển.
+                </p>
+              </div>
+
+              {/* ===== ĐỊA CHỈ + GPS ===== */}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                    Địa chỉ nhà bạn *
+                    <span className="inline-flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                      Bước 4: Địa chỉ nhà bạn *
+                    </span>
                   </label>
                   <button
                     type="button"
@@ -465,7 +710,7 @@ export default function PatientView({
                 />
               </div>
 
-              {/* Symptom */}
+              {/* ===== TRIỆU CHỨNG ===== */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
                   Mô tả triệu chứng / Bệnh lý hiện tại
@@ -479,6 +724,34 @@ export default function PatientView({
                 />
               </div>
 
+
+              {/* ===== BẢNG KÊ TÀI CHÍNH MINH BẠCH KIỂU GRAB ===== */}
+              <div className="p-3.5 rounded-2xl bg-gradient-to-br from-slate-50 to-emerald-50/30 border border-emerald-200/60 space-y-2">
+                <div className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                  <ChevronsUpDown className="w-3.5 h-3.5 text-emerald-600" />
+                  Chi Tiết Phí Dịch Vụ (Minh bạch kiểu Grab)
+                </div>
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-600">Giá dịch vụ khám:</span>
+                    <span className="font-bold text-slate-900">{formatVND(currentServiceFee)}</span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-slate-500">Phí nền tảng ({commissionRate}% trên giá dịch vụ):</span>
+                    <span className="font-mono text-slate-500">{formatVND(commissionAmount)}</span>
+                  </div>
+                  <div className="pt-1.5 border-t border-emerald-200 flex items-center justify-between">
+                    <span className="font-extrabold text-slate-900">Tổng thu tiền mặt tại nhà:</span>
+                    <span className="font-extrabold text-emerald-700 text-sm">{formatVND(totalPatientPay)}</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 italic">
+                    * Phí nền tảng do Thầy thuốc chịu (trừ từ Ví Tín Dụng), Bệnh nhân không phải trả thêm.
+                  </p>
+                </div>
+              </div>
+
+              {/* ===== NÚT ĐẶT LỊCH ===== */}
               <button
                 type="submit"
                 disabled={isSubmitting}
