@@ -12,15 +12,92 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* CHỦ Ý KHÔNG dùng prefers-color-scheme: dark.
+   Toàn bộ giao diện là bảng màu Y tế sáng (bg-white, text-slate-900...). Trước đây
+   khối dark-mode đổi nền body thành #0a0a0a trong khi mọi thẻ card vẫn trắng, nên
+   điện thoại bật Dark Mode (rất phổ biến vào buổi tối) sẽ thấy nền đen loang lổ và
+   chữ sáng nằm trên nền trắng. Khóa nền sáng để hiển thị nhất quán mọi thiết bị. */
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, -apple-system, 'Segoe UI', Arial, sans-serif;
+}
+
+/* ===== AN TOÀN BỐ CỤC MOBILE =====
+   Chặn mọi hiện tượng tràn lề ngang trên điện thoại (màn 360-390px).
+   Dùng `clip` chứ KHÔNG dùng `hidden`: `overflow-x: hidden` biến body thành vùng
+   cuộn và làm hỏng thanh header `position: sticky` ở đầu trang. */
+html,
+body {
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+/* Tự động xuống dòng với chuỗi dài không có khoảng trắng: UUID, số CCHN,
+   link ảnh Base64, email, địa chỉ dài... Đây là nguyên nhân phổ biến nhất
+   làm vỡ khung thẻ trên màn hình hẹp. */
+.break-anywhere {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+@layer base {
+  /* NGUYÊN NHÂN GỐC CỦA TRÀN LỀ NGANG TRÊN ĐIỆN THOẠI:
+     Theo chuẩn CSS, phần tử con của flex container có `min-width: auto`, nghĩa là
+     nó TỪ CHỐI co nhỏ hơn bề rộng nội dung. Chỉ cần một chuỗi dài (họ tên dài,
+     địa chỉ, UUID, số CCHN, mô tả triệu chứng) là cả hàng bị đẩy rộng hơn màn hình.
+     Đặt min-width: 0 để nội dung xuống dòng/cắt bớt thay vì phá khung.
+     Quy tắc nằm trong @layer base nên mọi tiện ích min-w-* của Tailwind
+     (ví dụ min-w-[130px] ở thanh tab Admin) vẫn ghi đè được bình thường. */
+  .flex > *,
+  .grid > * {
+    min-width: 0;
+  }
+
+  /* Chữ dài trong thẻ luôn ngắt dòng thay vì tràn ra ngoài viền */
+  p,
+  span,
+  h1,
+  h2,
+  h3,
+  h4,
+  li,
+  td,
+  div {
+    overflow-wrap: break-word;
+  }
+}
+
+/* Vùng cuộn ngang có chủ đích (thanh tab, bảng đối soát) không hiện thanh cuộn thô */
+.scrollbar-slim {
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+.scrollbar-slim::-webkit-scrollbar {
+  height: 4px;
+  width: 4px;
+}
+.scrollbar-slim::-webkit-scrollbar-thumb {
+  background-color: rgb(203 213 225);
+  border-radius: 9999px;
+}
+
+/* Ảnh & media không bao giờ được rộng hơn khung cha */
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+  height: auto;
+}
+
+/* iOS Safari tự phóng to trang khi focus input có cỡ chữ < 16px.
+   Giữ cỡ chữ hiển thị nhỏ nhưng chặn auto-zoom gây "căng méo" bố cục. */
+@supports (-webkit-touch-callout: none) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
 }

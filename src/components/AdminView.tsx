@@ -34,7 +34,9 @@ import {
   Sparkles,
   Clock,
   FileText,
+  ChevronDown,
 } from 'lucide-react';
+import CollapsibleRow from './CollapsibleRow';
 import {
   Profile,
   PractitionerProfile,
@@ -64,8 +66,15 @@ interface AdminViewProps {
   onDeleteService: (
     id: string
   ) => Promise<{ success: boolean; message?: string }>;
-  onVerifyPractitioner: (userId: string, isVerified: boolean) => Promise<{ success: boolean; message?: string } | void> | void;
-  onReassignDoctor: (bookingId: string, newDoctorId: string) => void;
+  onVerifyPractitioner: (
+    userId: string,
+    isVerified: boolean,
+    rejectionReason?: string
+  ) => Promise<{ success: boolean; message?: string } | void> | void;
+  onReassignDoctor: (
+    bookingId: string,
+    newDoctorId: string
+  ) => Promise<{ success: boolean; message?: string }> | void;
   onCancelBookingByAdmin: (
     bookingId: string,
     reason?: string
@@ -120,6 +129,19 @@ export default function AdminView({
 
   // Reassign modal state
   const [reassignBookingId, setReassignBookingId] = useState<string | null>(null);
+  // Danh sach don kham: thu gon thanh tung dong tieu de, bam vao moi mo chi tiet.
+  // Truoc day mo san toan bo nen trang dai hang nghin pixel, rat kho kiem soat.
+  const [expandedBookingId, setExpandedBookingId] = useState<string | null>(null);
+  const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
+  const [expandedPracId, setExpandedPracId] = useState<string | null>(null);
+  const [expandedServiceId, setExpandedServiceId] = useState<string | null>(null);
+  const [expandedKycId, setExpandedKycId] = useState<string | null>(null);
+  // So giao dich hien thi ban dau trong nhat ky doi soat (tranh do ra hang tram dong)
+  const [txVisibleCount, setTxVisibleCount] = useState<number>(10);
+  const [txFilter, setTxFilter] = useState<'ALL' | 'DEPOSIT' | 'LOCK_COMMISSION' | 'DEDUCT_COMMISSION' | 'REFUND_LOCK'>('ALL');
+  const [txSearch, setTxSearch] = useState<string>('');
+  const [bookingFilter, setBookingFilter] = useState<'ALL' | 'ACTIVE' | 'COMPLETED' | 'CANCELLED' | 'PENDING'>('ALL');
+  const [bookingSearch, setBookingSearch] = useState<string>('');
   const [targetDoctorId, setTargetDoctorId] = useState<string>('');
 
   // User Management state
@@ -313,6 +335,117 @@ export default function AdminView({
       setServiceSubmitting(false);
     }
   };
+
+  // Nhan trang thai dung chung cho ca dong tieu de gon lan phan chi tiet
+  const renderBookingStatusBadge = (status: Booking['status']) => {
+    if (status === 'CANCELLED_DOCTOR')
+      return (
+        <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-800 border border-rose-300 inline-flex items-center gap-1 whitespace-nowrap">
+          <ShieldAlert className="w-3 h-3 text-rose-600" /> Thầy Thuốc Hủy
+        </span>
+      );
+    if (status === 'CANCELLED_PATIENT')
+      return (
+        <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300 inline-flex items-center gap-1 whitespace-nowrap">
+          <XCircle className="w-3 h-3 text-amber-700" /> Bệnh Nhân Hủy
+        </span>
+      );
+    if (status === 'COMPLETED')
+      return (
+        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 whitespace-nowrap">
+          Đã Hoàn Tất
+        </span>
+      );
+    if (status === 'CONFIRMED')
+      return (
+        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200 whitespace-nowrap">
+          Đã Nhận Ca
+        </span>
+      );
+    if (status === 'ON_THE_WAY')
+      return (
+        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200 whitespace-nowrap">
+          Đang Di Chuyển
+        </span>
+      );
+    if (status === 'IN_PROGRESS')
+      return (
+        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-100 text-teal-800 border border-teal-200 whitespace-nowrap">
+          Đang Khám
+        </span>
+      );
+    return (
+      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-800 whitespace-nowrap">
+        Chờ Nhận Ca
+      </span>
+    );
+  };
+
+  // Dem theo tung danh muc de Admin kiem soat nhanh
+  const bookingCounts = {
+    ALL: bookings.length,
+    PENDING: bookings.filter((b) => b.status === 'PENDING').length,
+    ACTIVE: bookings.filter((b) =>
+      ['CONFIRMED', 'ON_THE_WAY', 'IN_PROGRESS'].includes(b.status)
+    ).length,
+    COMPLETED: bookings.filter((b) => b.status === 'COMPLETED').length,
+    CANCELLED: bookings.filter((b) => b.status.startsWith('CANCELLED')).length,
+  };
+
+  const filteredBookings = bookings.filter((b) => {
+    if (bookingFilter === 'PENDING' && b.status !== 'PENDING') return false;
+    if (
+      bookingFilter === 'ACTIVE' &&
+      !['CONFIRMED', 'ON_THE_WAY', 'IN_PROGRESS'].includes(b.status)
+    )
+      return false;
+    if (bookingFilter === 'COMPLETED' && b.status !== 'COMPLETED') return false;
+    if (bookingFilter === 'CANCELLED' && !b.status.startsWith('CANCELLED')) return false;
+
+    const kw = bookingSearch.trim().toLowerCase();
+    if (!kw) return true;
+    const patientName = profiles.find((p) => p.id === b.patient_id)?.full_name || '';
+    const doctorName = profiles.find((p) => p.id === b.practitioner_id)?.full_name || '';
+    return (
+      b.booking_code.toLowerCase().includes(kw) ||
+      b.service_name.toLowerCase().includes(kw) ||
+      b.patient_phone.includes(kw) ||
+      patientName.toLowerCase().includes(kw) ||
+      doctorName.toLowerCase().includes(kw)
+    );
+  });
+
+  // ===== ĐỐI SOÁT SÀN: tra cứu sổ cái theo loại giao dịch =====
+  // Mỗi ví thuộc về một Thầy thuốc, ánh xạ sẵn để tra tên nhanh khi lọc/tìm kiếm.
+  const walletOwnerName = (walletId: string): string => {
+    const w = Object.values(wallets).find((x) => x.id === walletId);
+    if (!w) return 'Không xác định';
+    return profiles.find((p) => p.id === w.user_id)?.full_name || 'Không xác định';
+  };
+
+  const txCounts = {
+    ALL: transactions.length,
+    DEPOSIT: transactions.filter((t) => t.type === 'DEPOSIT').length,
+    LOCK_COMMISSION: transactions.filter((t) => t.type === 'LOCK_COMMISSION').length,
+    DEDUCT_COMMISSION: transactions.filter((t) => t.type === 'DEDUCT_COMMISSION').length,
+    REFUND_LOCK: transactions.filter((t) => t.type === 'REFUND_LOCK').length,
+  };
+
+  // Tổng tiền của từng nhóm để Admin đối soát nhanh
+  const txSumByType = (type: typeof txFilter): number =>
+    transactions
+      .filter((t) => (type === 'ALL' ? true : t.type === type))
+      .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
+  const filteredTransactions = transactions.filter((t) => {
+    if (txFilter !== 'ALL' && t.type !== txFilter) return false;
+    const kw = txSearch.trim().toLowerCase();
+    if (!kw) return true;
+    return (
+      (t.description || '').toLowerCase().includes(kw) ||
+      walletOwnerName(t.wallet_id).toLowerCase().includes(kw)
+    );
+  });
 
   // Top-level metrics
   const unverifiedPractitioners = Object.values(practitioners).filter((p) => !p.is_verified);
@@ -513,26 +646,24 @@ export default function AdminView({
                 if (!user) return null;
 
                 return (
-                  <div
+                  <CollapsibleRow
                     key={prac.id}
-                    className="p-5 rounded-3xl bg-amber-50/50 border-2 border-amber-300 shadow-md space-y-3"
+                    accent="amber"
+                    isOpen={expandedKycId === prac.id}
+                    onToggle={() =>
+                      setExpandedKycId(expandedKycId === prac.id ? null : prac.id)
+                    }
+                    code={user.phone}
+                    badge={
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-200 text-amber-900">
+                        Chờ Phê Duyệt
+                      </span>
+                    }
+                    title={user.full_name}
+                    subtitle={prac.specialties.join(', ')}
                   >
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-slate-900 text-base">
-                            {user.full_name}
-                          </span>
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-200 text-amber-900">
-                            Chờ Phê Duyệt
-                          </span>
-                        </div>
-                        <div className="text-xs text-slate-600 font-mono mt-0.5">
-                          SĐT: {user.phone} • Chuyên khoa: {prac.specialties.join(', ')}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2">
+                    <div className="text-xs space-y-3">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <button
                           type="button"
                           onClick={async () => {
@@ -549,8 +680,18 @@ export default function AdminView({
                         <button
                           type="button"
                           onClick={async () => {
-                            if (confirm(`Từ chối hồ sơ của ${user.full_name}?`)) {
-                              await onVerifyPractitioner(user.id, false);
+                            // Lưu lý do vào practitioner_profiles.rejection_reason
+                            // để Thầy thuốc biết cần bổ sung gì, và Admin tra cứu về sau.
+                            const lyDo = prompt(
+                              `TỪ CHỐI hồ sơ CCHN của ${user.full_name}.\n\nNhập lý do (Thầy thuốc sẽ thấy để bổ sung hồ sơ):`,
+                              'Ảnh chứng chỉ không rõ nét, vui lòng chụp lại'
+                            );
+                            if (lyDo !== null) {
+                              await onVerifyPractitioner(
+                                user.id,
+                                false,
+                                lyDo.trim() || 'Admin từ chối hồ sơ CCHN'
+                              );
                             }
                           }}
                           className="px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs active:scale-95 transition-all cursor-pointer"
@@ -592,7 +733,7 @@ export default function AdminView({
                         )}
                       </div>
                     </div>
-                  </div>
+                  </CollapsibleRow>
                 );
               })
             )}
@@ -604,31 +745,40 @@ export default function AdminView({
               <ShieldCheck className="w-4 h-4 text-emerald-600" />
               Thầy Thuốc Đang Hoạt Động Hợp Pháp ({verifiedPractitioners.length})
             </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-2">
               {verifiedPractitioners.map((prac) => {
                 const user = profiles.find((p) => p.id === prac.user_id);
                 if (!user) return null;
                 const wallet = wallets[prac.user_id];
 
                 return (
-                  <div
+                  <CollapsibleRow
                     key={prac.id}
-                    className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm text-xs space-y-2"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <div className="font-bold text-slate-900 flex items-center gap-1">
-                          {user.full_name}
-                          <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                        </div>
-                        <div className="text-emerald-700 font-mono text-[11px] mt-0.5">
-                          {prac.license_number}
-                        </div>
-                      </div>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                    accent="emerald"
+                    isOpen={expandedPracId === prac.id}
+                    onToggle={() =>
+                      setExpandedPracId(expandedPracId === prac.id ? null : prac.id)
+                    }
+                    code={prac.license_number}
+                    badge={
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          prac.is_online
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-slate-100 text-slate-500'
+                        }`}
+                      >
                         {prac.is_online ? 'Online' : 'Offline'}
                       </span>
-                    </div>
+                    }
+                    title={
+                      <span className="flex items-center gap-1">
+                        {user.full_name}
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      </span>
+                    }
+                    subtitle={`Ví khả dụng: ${formatVND(wallet?.available_balance || 0)}`}
+                  >
 
                     <div className="p-2 bg-slate-50 rounded-xl text-[11px] space-y-1">
                       <div className="flex justify-between">
@@ -653,8 +803,16 @@ export default function AdminView({
                       <button
                         type="button"
                         onClick={() => {
-                          if (confirm(`Tạm khóa hoạt động của ${user.full_name}?`)) {
-                            onVerifyPractitioner(user.id, false);
+                          const lyDo = prompt(
+                            `TẠM KHÓA hoạt động của ${user.full_name}.\n\nNhập lý do tạm khóa:`,
+                            'Tạm khóa để rà soát lại hồ sơ'
+                          );
+                          if (lyDo !== null) {
+                            onVerifyPractitioner(
+                              user.id,
+                              false,
+                              lyDo.trim() || 'Admin tạm khóa hoạt động'
+                            );
                           }
                         }}
                         className="text-[11px] text-rose-600 hover:text-rose-800 px-2 py-1 rounded-lg hover:bg-rose-50"
@@ -662,7 +820,7 @@ export default function AdminView({
                         Tạm Khóa Hoạt Động
                       </button>
                     </div>
-                  </div>
+                  </CollapsibleRow>
                 );
               })}
             </div>
@@ -681,66 +839,112 @@ export default function AdminView({
             <span className="text-xs text-slate-500">Chế độ điều phối trung tâm</span>
           </div>
 
-          <div className="space-y-3">
-            {bookings.map((b) => {
+          {/* Bo loc theo danh muc + tim kiem */}
+          <div className="space-y-2 mb-3">
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={bookingSearch}
+                onChange={(e) => setBookingSearch(e.target.value)}
+                placeholder="Tìm mã đơn, dịch vụ, tên hoặc SĐT bệnh nhân / thầy thuốc..."
+                className="w-full pl-9 pr-4 py-2.5 rounded-2xl border border-slate-200 bg-white text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-purple-600 shadow-xs"
+              />
+            </div>
+
+            <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-slim pb-1">
+              {(
+                [
+                  ['ALL', 'Tất cả'],
+                  ['PENDING', 'Chờ nhận ca'],
+                  ['ACTIVE', 'Đang diễn ra'],
+                  ['COMPLETED', 'Hoàn tất'],
+                  ['CANCELLED', 'Đã hủy'],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setBookingFilter(key)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                    bookingFilter === key
+                      ? 'bg-purple-900 text-white shadow-xs'
+                      : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  {label} ({bookingCounts[key]})
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            {filteredBookings.length === 0 && (
+              <div className="p-8 text-center bg-white rounded-2xl border border-slate-200">
+                <Calendar className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                <p className="text-sm font-bold text-slate-700">Không có đơn khám nào khớp bộ lọc</p>
+              </div>
+            )}
+            {filteredBookings.map((b) => {
               const patient = profiles.find((p) => p.id === b.patient_id);
               const doctor = profiles.find((p) => p.id === b.practitioner_id);
 
               return (
                 <div
                   key={b.id}
-                  className="p-5 rounded-3xl bg-white border border-slate-200 shadow-md space-y-3"
+                  className="rounded-2xl bg-white border border-slate-200 shadow-xs overflow-hidden"
                 >
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-bold text-xs text-slate-500">
-                          {b.booking_code}
-                        </span>
-                        {b.status === 'CANCELLED_DOCTOR' ? (
-                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-black bg-rose-100 text-rose-800 border border-rose-300 flex items-center gap-1">
-                            <ShieldAlert className="w-3.5 h-3.5 text-rose-600" /> Bác Sĩ / Thầy Thuốc Hủy Ca
-                          </span>
-                        ) : b.status === 'CANCELLED_PATIENT' ? (
-                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-black bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
-                            <XCircle className="w-3.5 h-3.5 text-amber-700" /> Bệnh Nhân Hủy Ca
-                          </span>
-                        ) : b.status === 'COMPLETED' ? (
-                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                            Đã Hoàn Tất
-                          </span>
-                        ) : b.status === 'CONFIRMED' ? (
-                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
-                            Đã Nhận Ca
-                          </span>
-                        ) : b.status === 'ON_THE_WAY' ? (
-                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
-                            Đang Di Chuyển
-                          </span>
-                        ) : b.status === 'IN_PROGRESS' ? (
-                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-teal-100 text-teal-800 border border-teal-200">
-                            Đang Khám
-                          </span>
+                  {/* DÒNG TIÊU ĐỀ GỌN 1 HÀNG - bấm vào để mở/đóng chi tiết đơn */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpandedBookingId(expandedBookingId === b.id ? null : b.id)
+                    }
+                    className={`w-full text-left px-3 py-2 flex items-center gap-2.5 transition-colors ${
+                      expandedBookingId === b.id ? 'bg-purple-50/60' : 'hover:bg-slate-50'
+                    }`}
+                  >
+                    <ChevronDown
+                      className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${
+                        expandedBookingId === b.id ? 'rotate-180 text-purple-700' : ''
+                      }`}
+                    />
+
+                    <div className="min-w-0 flex-1 flex items-center gap-2">
+                      <span className="font-mono font-bold text-[11px] text-slate-400 shrink-0">
+                        {b.booking_code}
+                      </span>
+                      {renderBookingStatusBadge(b.status)}
+                      <span className="text-xs font-bold text-slate-900 truncate">
+                        {b.service_name}
+                      </span>
+                      <span className="text-[11px] text-slate-400 truncate hidden md:inline shrink-0">
+                        {patient?.full_name || 'Bệnh nhân'}
+                        <span className="text-slate-300 mx-1">→</span>
+                        {doctor ? (
+                          <span className="text-teal-700">{doctor.full_name}</span>
                         ) : (
-                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-800">
-                            {b.status}
-                          </span>
+                          <span className="text-amber-700">Chưa có thầy thuốc</span>
                         )}
-                      </div>
-                      <h4 className="text-sm font-bold text-slate-900 mt-0.5">{b.service_name}</h4>
+                      </span>
                     </div>
 
-                    <div className="text-right">
-                      <div className="text-sm font-extrabold text-purple-900">
+                    <div className="text-right shrink-0">
+                      <div className="text-xs font-extrabold text-purple-900 whitespace-nowrap">
                         {formatVND(b.service_fee + b.travel_surcharge)}
                       </div>
-                      <div className="text-[11px] text-slate-500">
-                        Phí sàn ({b.commission_rate}%):{' '}
-                        <strong className="text-amber-700">{formatVND(b.commission_amount)}</strong>
+                      <div className="text-[10px] text-slate-500 whitespace-nowrap">
+                        Phí sàn:{' '}
+                        <strong className="text-amber-700">
+                          {formatVND(b.commission_amount)}
+                        </strong>
                       </div>
                     </div>
-                  </div>
+                  </button>
 
+                  {/* CHI TIẾT - chỉ hiện khi được bấm mở */}
+                  {expandedBookingId === b.id && (
+                    <div className="px-3.5 pb-3.5 pt-3 space-y-3 border-t border-slate-100 bg-slate-50/40">
                   {/* Pairwise Connection Details */}
                   <div className="p-3 bg-slate-50 rounded-2xl grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs border border-slate-100">
                     <div>
@@ -867,7 +1071,9 @@ export default function AdminView({
                         <XCircle className="w-3.5 h-3.5" /> Hủy Đơn & Hoàn Phí Tạm Giữ
                       </button>
                     )}
-                  </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1015,53 +1221,46 @@ export default function AdminView({
             }
 
             return (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
                 {filtered.map((s) => {
                   const comm = Math.round((s.price * 15) / 100);
                   const docReceive = s.price - comm;
 
                   return (
-                    <div
+                    <CollapsibleRow
                       key={s.id}
-                      className={`p-5 rounded-3xl bg-white border transition-all flex flex-col justify-between gap-4 shadow-xs hover:shadow-md ${
-                        s.is_active !== false ? 'border-slate-200' : 'border-slate-300 bg-slate-50/70 opacity-75'
-                      }`}
+                      accent={s.is_active !== false ? 'emerald' : 'slate'}
+                      isOpen={expandedServiceId === s.id}
+                      onToggle={() =>
+                        setExpandedServiceId(expandedServiceId === s.id ? null : s.id)
+                      }
+                      leading={
+                        <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+                          <Sparkles className="w-4 h-4" />
+                        </div>
+                      }
+                      badge={
+                        s.is_active !== false ? (
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold inline-flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
+                            Đang phục vụ
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 text-[10px] font-bold inline-flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                            Tạm ẩn
+                          </span>
+                        )
+                      }
+                      title={s.name}
+                      subtitle={`${s.duration_minutes || 60} phút • Sàn thu ${formatVND(comm)}`}
+                      right={
+                        <span className="text-xs font-extrabold text-emerald-700 whitespace-nowrap">
+                          {formatVND(s.price)}
+                        </span>
+                      }
                     >
                       <div>
-                        {/* Top title & status badge */}
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-2">
-                            <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
-                              <Sparkles className="w-4 h-4" />
-                            </div>
-                            <div>
-                              <h4 className="text-sm sm:text-base font-bold text-slate-900 leading-snug">
-                                {s.name}
-                              </h4>
-                              <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5">
-                                <span className="flex items-center gap-1">
-                                  <Clock className="w-3.5 h-3.5 text-slate-400" />
-                                  {s.duration_minutes || 60} phút
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div>
-                            {s.is_active !== false ? (
-                              <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold inline-flex items-center gap-1">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
-                                Đang phục vụ
-                              </span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 text-[10px] font-bold inline-flex items-center gap-1">
-                                <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-                                Tạm ẩn
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
                         {/* Price Breakdown */}
                         <div className="mt-3.5 p-3 rounded-2xl bg-slate-50 border border-slate-100 grid grid-cols-2 gap-2 text-xs">
                           <div>
@@ -1120,7 +1319,7 @@ export default function AdminView({
                           </button>
                         </div>
                       </div>
-                    </div>
+                    </CollapsibleRow>
                   );
                 })}
               </div>
@@ -1254,14 +1453,22 @@ export default function AdminView({
                 const isPasswordShown = !!showPasswordMap[user.id];
 
                 return (
-                  <div
+                  <CollapsibleRow
                     key={user.id}
-                    className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs hover:bg-slate-50/60 transition-colors"
-                  >
-                    <div className="flex items-start gap-3">
-                      {/* Avatar initial */}
+                    accent={
+                      user.role === 'ADMIN'
+                        ? 'purple'
+                        : user.role === 'PRACTITIONER'
+                        ? 'teal'
+                        : 'emerald'
+                    }
+                    isOpen={expandedUserId === user.id}
+                    onToggle={() =>
+                      setExpandedUserId(expandedUserId === user.id ? null : user.id)
+                    }
+                    leading={
                       <div
-                        className={`w-10 h-10 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 shadow-xs ${
+                        className={`w-9 h-9 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 shadow-xs ${
                           user.role === 'ADMIN'
                             ? 'bg-purple-100 text-purple-900 border border-purple-200'
                             : user.role === 'PRACTITIONER'
@@ -1271,36 +1478,41 @@ export default function AdminView({
                       >
                         {user.full_name ? user.full_name.charAt(0).toUpperCase() : 'U'}
                       </div>
-
-                      <div className="space-y-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <strong className="text-sm font-extrabold text-slate-900">
-                            {user.full_name}
-                          </strong>
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                              user.role === 'ADMIN'
-                                ? 'bg-purple-100 text-purple-900 border border-purple-200'
-                                : user.role === 'PRACTITIONER'
-                                ? 'bg-teal-100 text-teal-900 border border-teal-200'
-                                : 'bg-emerald-100 text-emerald-900 border border-emerald-200'
-                            }`}
-                          >
-                            {user.role === 'PATIENT' ? 'Bệnh nhân' : user.role === 'PRACTITIONER' ? 'Thầy thuốc' : 'Admin'}
+                    }
+                    badge={
+                      <>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                            user.role === 'ADMIN'
+                              ? 'bg-purple-100 text-purple-900 border border-purple-200'
+                              : user.role === 'PRACTITIONER'
+                              ? 'bg-teal-100 text-teal-900 border border-teal-200'
+                              : 'bg-emerald-100 text-emerald-900 border border-emerald-200'
+                          }`}
+                        >
+                          {user.role === 'PATIENT'
+                            ? 'Bệnh nhân'
+                            : user.role === 'PRACTITIONER'
+                            ? 'Thầy thuốc'
+                            : 'Admin'}
+                        </span>
+                        {user.is_active === false && (
+                          <span className="px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[10px] font-bold">
+                            Tạm khóa
                           </span>
-
-                          {user.is_active === false && (
-                            <span className="px-1.5 py-0.2 rounded-full bg-rose-100 text-rose-800 text-[10px] font-bold">
-                              Tạm khóa
-                            </span>
-                          )}
-
-                          {user.id === currentUser.id && (
-                            <span className="px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-900 text-[10px] font-bold">
-                              Bạn đang đăng nhập
-                            </span>
-                          )}
-                        </div>
+                        )}
+                        {user.id === currentUser.id && (
+                          <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[10px] font-bold">
+                            Bạn đang đăng nhập
+                          </span>
+                        )}
+                      </>
+                    }
+                    title={user.full_name}
+                    subtitle={user.phone}
+                  >
+                    <div className="text-xs">
+                      <div className="space-y-1">
 
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-500 font-mono text-[11px]">
                           <span className="flex items-center gap-1 text-slate-700 font-bold">
@@ -1441,7 +1653,7 @@ export default function AdminView({
                         </button>
                       )}
                     </div>
-                  </div>
+                  </CollapsibleRow>
                 );
               })
             )}
@@ -1487,33 +1699,134 @@ export default function AdminView({
 
           {/* Audit ledger of recent transactions */}
           <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-md space-y-3">
-            <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">
-              Nhật Ký Biến Động Sàn Toàn Bộ
-            </h4>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                Nhật Ký Biến Động Sàn ({filteredTransactions.length})
+              </h4>
+              <span className="text-xs font-bold text-purple-800">
+                Tổng nhóm đang xem: {formatVND(txSumByType(txFilter))}
+              </span>
+            </div>
+
+            {/* Tìm kiếm + lọc theo loại giao dịch, đồng bộ với các tab khác */}
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={txSearch}
+                onChange={(e) => setTxSearch(e.target.value)}
+                placeholder="Tìm theo mã đơn, nội dung hoặc tên Thầy thuốc..."
+                className="w-full pl-9 pr-4 py-2.5 rounded-2xl border border-slate-200 bg-white text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-purple-600 shadow-xs"
+              />
+            </div>
+
+            <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-slim pb-1">
+              {(
+                [
+                  ['ALL', 'Tất cả'],
+                  ['DEPOSIT', 'Nạp ví'],
+                  ['LOCK_COMMISSION', 'Tạm giữ'],
+                  ['DEDUCT_COMMISSION', 'Quyết toán'],
+                  ['REFUND_LOCK', 'Hoàn trả'],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => {
+                    setTxFilter(key);
+                    setTxVisibleCount(10);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                    txFilter === key
+                      ? 'bg-purple-900 text-white shadow-xs'
+                      : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  {label} ({txCounts[key]})
+                </button>
+              ))}
+            </div>
+
             <div className="divide-y divide-slate-100 text-xs">
-              {transactions.map((tx) => (
-                <div key={tx.id} className="py-2.5 flex items-center justify-between">
-                  <div>
-                    <div className="font-bold text-slate-800">{tx.description}</div>
+              {filteredTransactions.length === 0 && (
+                <div className="py-8 text-center text-slate-500 text-xs">
+                  Không có giao dịch nào khớp bộ lọc.
+                </div>
+              )}
+              {filteredTransactions.slice(0, txVisibleCount).map((tx) => (
+                <div key={tx.id} className="py-2.5 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-800 break-anywhere">{tx.description}</div>
                     <div className="text-[10px] text-slate-400 font-mono">
                       {formatDateTime(tx.created_at)}
+                      <span className="text-slate-300 mx-1">•</span>
+                      <span className="text-teal-700">{walletOwnerName(tx.wallet_id)}</span>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <span className="font-bold text-purple-900">{formatVND(tx.amount)}</span>
-                    <span className="block text-[10px] text-slate-400 uppercase">{tx.type}</span>
+                  <div className="text-right shrink-0">
+                    <span
+                      className={`font-bold ${
+                        tx.type === 'DEPOSIT' || tx.type === 'REFUND_LOCK'
+                          ? 'text-emerald-700'
+                          : tx.type === 'DEDUCT_COMMISSION'
+                          ? 'text-purple-900'
+                          : 'text-amber-700'
+                      }`}
+                    >
+                      {tx.type === 'DEPOSIT' || tx.type === 'REFUND_LOCK' ? '+' : '−'}
+                      {formatVND(tx.amount)}
+                    </span>
+                    <span
+                      className={`block text-[10px] font-bold uppercase ${
+                        tx.type === 'DEPOSIT'
+                          ? 'text-emerald-600'
+                          : tx.type === 'REFUND_LOCK'
+                          ? 'text-emerald-600'
+                          : tx.type === 'DEDUCT_COMMISSION'
+                          ? 'text-purple-600'
+                          : 'text-amber-600'
+                      }`}
+                    >
+                      {tx.type === 'DEPOSIT'
+                        ? 'Nạp ví'
+                        : tx.type === 'LOCK_COMMISSION'
+                        ? 'Tạm giữ'
+                        : tx.type === 'DEDUCT_COMMISSION'
+                        ? 'Quyết toán'
+                        : 'Hoàn trả'}
+                    </span>
                   </div>
                 </div>
               ))}
             </div>
+
+            {filteredTransactions.length > txVisibleCount && (
+              <button
+                type="button"
+                onClick={() => setTxVisibleCount((n) => n + 20)}
+                className="w-full py-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-xs font-bold text-slate-600"
+              >
+                Xem thêm 20 giao dịch (còn {filteredTransactions.length - txVisibleCount})
+              </button>
+            )}
+            {txVisibleCount > 10 && (
+              <button
+                type="button"
+                onClick={() => setTxVisibleCount(10)}
+                className="w-full py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-600"
+              >
+                Thu gọn nhật ký
+              </button>
+            )}
           </div>
         </div>
       )}
 
       {/* DISPATCH / REASSIGN MODAL */}
       {reassignBookingId && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl animate-in fade-in zoom-in-95">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl animate-in fade-in zoom-in-95 my-auto max-h-[90vh] overflow-y-auto scrollbar-slim">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-black text-slate-900 uppercase">
                 Điều Phối / Đổi Thầy Thuốc
@@ -1557,12 +1870,26 @@ export default function AdminView({
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  onReassignDoctor(reassignBookingId, targetDoctorId);
+                onClick={async () => {
+                  // Điều phối có thể thất bại thật (ví Thầy thuốc mới không đủ phí
+                  // nền tảng, chưa duyệt CCHN, đơn đã kết thúc). Trước đây luôn báo
+                  // thành công nên Admin không biết thao tác đã bị từ chối.
+                  const res = await onReassignDoctor(reassignBookingId, targetDoctorId);
                   setReassignBookingId(null);
+
+                  if (res && res.success === false) {
+                    setAdminMsg({
+                      type: 'error',
+                      text: res.message || 'Không điều phối được Thầy thuốc cho ca khám này.',
+                    });
+                    return;
+                  }
+
                   setAdminMsg({
                     type: 'success',
-                    text: 'Đã điều phối và gán lại Thầy thuốc phụ trách thành công!',
+                    text:
+                      (res && res.message) ||
+                      'Đã điều phối và gán lại Thầy thuốc phụ trách thành công!',
                   });
                 }}
                 className="flex-1 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs shadow-md"
@@ -1593,8 +1920,8 @@ export default function AdminView({
 
       {/* 1. MODAL TẠO MỚI TÀI KHOẢN */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95 my-8">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95 my-auto max-h-[90vh] overflow-y-auto scrollbar-slim">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-xl bg-purple-100 text-purple-800 flex items-center justify-center font-bold">
@@ -1879,8 +2206,8 @@ export default function AdminView({
 
       {/* 2. MODAL CẬP NHẬT / SỬA THÔNG TIN NGƯỜI DÙNG */}
       {editingUser && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95 my-8">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95 my-auto max-h-[90vh] overflow-y-auto scrollbar-slim">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
@@ -1890,7 +2217,11 @@ export default function AdminView({
                   <h4 className="text-sm font-extrabold text-slate-900 uppercase">
                     Cập Nhật Người Dùng
                   </h4>
-                  <p className="text-[11px] text-slate-500 font-mono">ID: {editingUser.id}</p>
+                  {/* UUID dài 36 ký tự không có khoảng trắng -> bắt buộc cho phép
+                      ngắt dòng, nếu không sẽ đẩy vỡ khung modal trên điện thoại */}
+                  <p className="text-[11px] text-slate-500 font-mono break-anywhere">
+                    ID: {editingUser.id}
+                  </p>
                 </div>
               </div>
               <button
@@ -2147,8 +2478,8 @@ export default function AdminView({
 
       {/* 3. MODAL ĐẶT LẠI MẬT KHẨU */}
       {resetModalUser && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95 my-auto max-h-[90vh] overflow-y-auto scrollbar-slim">
             <div className="flex items-center justify-between pb-2 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
@@ -2281,8 +2612,8 @@ export default function AdminView({
 
       {/* 4. MODAL XÁC NHẬN XÓA TÀI KHOẢN */}
       {deletingUser && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95 my-auto max-h-[90vh] overflow-y-auto scrollbar-slim">
             <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
               <Trash2 className="w-6 h-6" />
             </div>
@@ -2351,8 +2682,8 @@ export default function AdminView({
       )}
       {/* ====== MODAL: TẠO MỚI / CHỈNH SỬA DỊCH VỤ ====== */}
       {showServiceModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 my-8">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 my-auto max-h-[90vh] overflow-y-auto scrollbar-slim">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
@@ -2504,8 +2835,8 @@ export default function AdminView({
 
       {/* ====== MODAL: XÁC NHẬN XÓA DỊCH VỤ ====== */}
       {deletingService && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4 text-center">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4 text-center my-auto max-h-[90vh] overflow-y-auto scrollbar-slim">
             <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
               <Trash2 className="w-6 h-6" />
             </div>

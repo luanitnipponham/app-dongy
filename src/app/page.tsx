@@ -29,6 +29,7 @@ import {
   INITIAL_SERVICES,
 } from '@/lib/mock-data';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase/client';
+import { startClockSync } from '@/lib/server-clock';
 import AuthPortal from '@/components/AuthPortal';
 import PatientView from '@/components/PatientView';
 import PractitionerView from '@/components/PractitionerView';
@@ -89,6 +90,18 @@ export default function Home() {
   const lastBookingTimestampRef = useRef<number>(0);
   const [showDbModal, setShowDbModal] = useState<boolean>(false);
 
+  // =========================================================================
+  // CHỐNG POLLING GHI ĐÈ NGƯỢC (STALE WRITE GUARD)
+  // Mỗi lần ghi dữ liệu (duyệt CCHN, điều phối, nhận ca...) sẽ đóng dấu thời gian.
+  // Một request polling bắt đầu TRƯỚC dấu này mang dữ liệu đã cũ, nếu nó về sau
+  // thì sẽ kéo state tụt về giá trị cũ, làm Admin tưởng thao tác bị lỗi.
+  // => Mọi kết quả polling cũ hơn dấu mutation đều bị loại bỏ.
+  // =========================================================================
+  const lastMutationAtRef = useRef<number>(0);
+  const markMutation = useCallback(() => {
+    lastMutationAtRef.current = Date.now();
+  }, []);
+
 
   // =========================================================================
   // TỰ ĐỘNG ĐỒNG BỘ DỮ LIỆU MỖI 5 GIÂY (5s LIVE SYNC SUPABASE)
@@ -97,9 +110,15 @@ export default function Home() {
   const syncSupabaseDataQuietly = async () => {
     if (!isSupabaseConfigured) return;
 
+    // Đóng dấu thời điểm BẮT ĐẦU đọc. Nếu trong lúc chờ phản hồi có thao tác ghi
+    // nào xảy ra thì dữ liệu đọc được đã lỗi thời -> bỏ qua, không ghi vào state.
+    const startedAt = Date.now();
+    const isStale = () => lastMutationAtRef.current > startedAt;
+
     try {
       // 1. Profiles
       const { data: profData } = await supabase.from('profiles').select('*');
+      if (isStale()) return;
       if (profData && profData.length > 0) {
         setProfiles(profData);
         setCurrentUser((prevCur) => {
@@ -109,21 +128,34 @@ export default function Home() {
       }
 
       // 2. Practitioners
-      const { data: pracData } = await supabase.from('practitioner_profiles').select('*');
+      // CHỦ Ý: KHÔNG lấy license_image_url ở đây. Ảnh CCHN lưu dạng Base64 nên
+      // `select('*')` kéo về ~2MB mỗi 5 giây cho mỗi user (đã đo thực tế).
+      // Ảnh chỉ cần nạp 1 lần ở checkSupabaseConnection và được giữ lại khi merge.
+      const { data: pracData } = await supabase
+        .from('practitioner_profiles')
+        .select(
+          'id,user_id,specialties,license_number,issued_by,years_of_experience,bio,base_service_fee,commission_rate,is_verified,rejection_reason,is_online,current_lat,current_lng,rating_avg,total_reviews,completed_jobs,cancelled_jobs,updated_at'
+        );
+      if (isStale()) return;
       if (pracData && pracData.length > 0) {
-        const pracMap: Record<string, PractitionerProfile> = {};
-        pracData.forEach((p) => {
-          pracMap[p.user_id] = p;
+        setPractitioners((prev) => {
+          const pracMap: Record<string, PractitionerProfile> = {};
+          pracData.forEach((p) => {
+            // Merge để giữ lại license_image_url đã nạp trước đó
+            pracMap[p.user_id] = { ...prev[p.user_id], ...p } as PractitionerProfile;
+          });
+          return pracMap;
         });
-        setPractitioners(pracMap);
         setCurrentPractitioner((prevPrac) => {
           if (!prevPrac) return null;
-          return pracMap[prevPrac.user_id] || prevPrac;
+          const fresh = pracData.find((p) => p.user_id === prevPrac.user_id);
+          return fresh ? ({ ...prevPrac, ...fresh } as PractitionerProfile) : prevPrac;
         });
       }
 
       // 3. Wallets
       const { data: walletData } = await supabase.from('wallets').select('*');
+      if (isStale()) return;
       if (walletData && walletData.length > 0) {
         const wMap: Record<string, Wallet> = {};
         walletData.forEach((w) => {
@@ -137,6 +169,7 @@ export default function Home() {
         .from('bookings')
         .select('*')
         .order('created_at', { ascending: false });
+      if (isStale()) return;
       if (bData && bData.length > 0) {
         setBookings(bData);
       }
@@ -146,6 +179,7 @@ export default function Home() {
         .from('wallet_transactions')
         .select('*')
         .order('created_at', { ascending: false });
+      if (isStale()) return;
       if (txData && txData.length > 0) {
         setTransactions(txData);
       }
@@ -155,6 +189,7 @@ export default function Home() {
         .from('services')
         .select('*')
         .order('created_at', { ascending: true });
+      if (isStale()) return;
       if (srvData && srvData.length > 0) {
         setServices(srvData);
       }
@@ -276,11 +311,18 @@ export default function Home() {
       clearTimeout(realtimeSyncTimerRef.current);
     }
     realtimeSyncTimerRef.current = setTimeout(() => {
-      checkSupabaseConnection();
+      // Dùng bản đọc nhẹ (không kéo ảnh CCHN Base64) và có hàng rào chống ghi đè.
+      // Trước đây gọi checkSupabaseConnection() nên mỗi sự kiện realtime đều tải
+      // lại ~2MB và ghi đè thẳng vào state, làm mất thao tác vừa thực hiện.
+      syncSupabaseDataQuietly();
     }, 1000); // Wait 1s after last realtime event before re-fetching
   }, []);
 
   useEffect(() => {
+    // 0. Đồng bộ đồng hồ với server Supabase (chống thiết bị sai giờ).
+    // Mọi tính toán giờ hẹn đều dựa trên đồng hồ này, không dựa vào đồng hồ máy.
+    const stopClockSync = startClockSync();
+
     // 1. Initial connection check & load
     checkSupabaseConnection();
 
@@ -304,6 +346,7 @@ export default function Home() {
     }
 
     return () => {
+      stopClockSync();
       clearInterval(pollingInterval);
       if (channel) {
         supabase.removeChannel(channel);
@@ -330,6 +373,7 @@ export default function Home() {
     password: string;
     address: string;
   }) => {
+    markMutation();
     const newId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : '11111111-1111-1111-1111-' + Date.now().toString().slice(-12).padStart(12, '0');
     const newProfile: Profile = {
       id: newId,
@@ -344,16 +388,27 @@ export default function Home() {
     };
 
     setProfiles((prev) => [newProfile, ...prev]);
-    setCurrentUser(newProfile);
-    setCurrentPractitioner(null);
-
-    if (isLiveConnected) {
-      try {
-        await supabase.from('profiles').insert([newProfile]);
-      } catch (e) {
-        console.error('Supabase insert profile error:', e);
+    // Ghi xuống Supabase TRƯỚC khi đăng nhập. Trước đây đăng nhập trước rồi ghi
+    // sau và nuốt lỗi, nên khi ghi hỏng thì tài khoản chỉ tồn tại trong bộ nhớ và
+    // bị vòng đồng bộ 5 giây xoá sạch mà người dùng không hề được báo.
+    if (isSupabaseConfigured) {
+      const { error } = await supabase.from('profiles').insert([newProfile]);
+      if (error) {
+        console.error('Supabase insert profile error:', error);
+        setProfiles((prev) => prev.filter((p) => p.id !== newId));
+        return {
+          success: false,
+          message:
+            error.code === '23505'
+              ? `Số điện thoại "${data.phone}" đã được đăng ký trên hệ thống. Vui lòng đăng nhập.`
+              : `Không lưu được tài khoản lên Supabase: ${error.message}`,
+        };
       }
     }
+
+    setCurrentUser(newProfile);
+    setCurrentPractitioner(null);
+    return { success: true };
   };
 
   // 2. Practitioner Register (eKYC Legal requirements)
@@ -367,6 +422,7 @@ export default function Home() {
     issuedBy: string;
     licenseImageUrl: string;
   }) => {
+    markMutation();
     const newId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : '22222222-2222-2222-2222-' + Date.now().toString().slice(-12).padStart(12, '0');
     const newPracId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : '33333333-3333-3333-3333-' + Date.now().toString().slice(-12).padStart(12, '0');
     const newWalletId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : generateUUID();
@@ -409,6 +465,43 @@ export default function Home() {
       updated_at: new Date().toISOString(),
     };
 
+    // Ghi đủ 3 bảng xuống Supabase TRƯỚC khi đăng nhập và báo thành công.
+    // Trước đây lỗi ghi bị nuốt vào console: hồ sơ Thầy thuốc chỉ nằm trong bộ nhớ,
+    // vòng đồng bộ 5 giây xoá mất, nên Admin không thấy hồ sơ nào để duyệt CCHN và
+    // Bệnh nhân cũng không thấy bác sỹ đó trong danh sách chọn.
+    if (isSupabaseConfigured) {
+      const { error: profErr } = await supabase.from('profiles').insert([newProfile]);
+      if (profErr) {
+        console.error('Supabase insert profile error:', profErr);
+        return {
+          success: false,
+          message:
+            profErr.code === '23505'
+              ? `Số điện thoại "${data.phone}" đã được đăng ký trên hệ thống. Vui lòng đăng nhập.`
+              : `Không lưu được tài khoản lên Supabase: ${profErr.message}`,
+        };
+      }
+
+      const { error: pracErr } = await supabase
+        .from('practitioner_profiles')
+        .insert([newPractitioner]);
+      if (pracErr) {
+        console.error('Supabase insert practitioner_profiles error:', pracErr);
+        // Dọn lại profile vừa tạo để không để tài khoản "mồ côi" không có hồ sơ CCHN
+        await supabase.from('profiles').delete().eq('id', newId);
+        return {
+          success: false,
+          message: `Không lưu được hồ sơ Chứng chỉ hành nghề: ${pracErr.message}`,
+        };
+      }
+
+      const { error: walletErr } = await supabase.from('wallets').insert([newWallet]);
+      if (walletErr) {
+        // Ví thiếu thì Admin vẫn duyệt được, hàm RPC sẽ tự tạo ví khi cần
+        console.error('Supabase insert wallet error:', walletErr);
+      }
+    }
+
     setProfiles((prev) => [newProfile, ...prev]);
     setPractitioners((prev) => ({ ...prev, [newId]: newPractitioner }));
     setWallets((prev) => ({ ...prev, [newId]: newWallet }));
@@ -416,21 +509,14 @@ export default function Home() {
     setCurrentUser(newProfile);
     setCurrentPractitioner(newPractitioner);
 
-    if (isLiveConnected) {
-      try {
-        await supabase.from('profiles').insert([newProfile]);
-        await supabase.from('practitioner_profiles').insert([newPractitioner]);
-        await supabase.from('wallets').insert([newWallet]);
-      } catch (e) {
-        console.error('Supabase register practitioner error:', e);
-      }
-    }
+    return { success: true };
   };
 
   // 3. Create Booking (Chống spam / đúp đơn trùng lặp - Triple-lock protection)
   const handleCreateBooking = useCallback(async (
     newBooking: Partial<Booking>
   ): Promise<{ success: boolean; message?: string; booking?: Booking }> => {
+    markMutation();
     // === LOCK 1: Ref-based mutex lock (survives re-renders, prevents concurrent calls) ===
     if (bookingLockRef.current) {
       return {
@@ -497,7 +583,7 @@ export default function Home() {
         updated_at: nowISO,
       };
 
-      if (isLiveConnected) {
+      if (isSupabaseConfigured) {
         try {
           const { error: bErr } = await supabase.from('bookings').insert([bookingFull]);
           if (bErr) {
@@ -544,6 +630,48 @@ export default function Home() {
     const targetBooking = bookings.find((b) => b.id === bookingId);
     if (!targetBooking) return { success: false, message: 'Không tìm thấy ca khám!' };
     if (!currentUser) return { success: false, message: 'Bạn chưa đăng nhập!' };
+
+    markMutation();
+
+    // =====================================================================
+    // ƯU TIÊN RPC NGUYÊN TỬ accept_booking_with_escrow
+    // Tự tính tiền bằng JavaScript rồi ghi 3 lệnh UPDATE rời rạc là nguyên nhân
+    // làm số dư tạm giữ bị lệch: không có transaction, không có SELECT FOR UPDATE,
+    // và lệnh UPDATE bookings không ràng buộc status='PENDING' nên hai thầy thuốc
+    // bấm "Nhận ca" cùng lúc đều bị trừ tiền còn đơn thuộc về người ghi sau.
+    // RPC trong DB đã thẩm định CCHN + khóa dòng + kiểm tra số dư trong 1 transaction.
+    // =====================================================================
+    if (isSupabaseConfigured) {
+      try {
+        const { error: rpcErr } = await supabase.rpc('accept_booking_with_escrow', {
+          p_booking_id: bookingId,
+          p_practitioner_id: currentUser.id,
+        });
+
+        if (!rpcErr) {
+          markMutation();
+          await syncSupabaseDataQuietly();
+          return {
+            success: true,
+            message: `Đã nhận ca khám ${targetBooking.booking_code}! Phí nền tảng đã được tạm giữ an toàn.`,
+          };
+        }
+
+        // RPC tồn tại nhưng từ chối (chưa duyệt CCHN / ví không đủ / đơn đã có người
+        // nhận) -> đây là lỗi nghiệp vụ thật, phải trả về đúng thông báo của DB.
+        if (rpcErr.code !== 'PGRST202') {
+          console.warn('RPC accept_booking_with_escrow từ chối:', rpcErr);
+          markMutation();
+          await syncSupabaseDataQuietly();
+          return { success: false, message: rpcErr.message };
+        }
+
+        // PGRST202 = chưa có hàm RPC trên Supabase -> chạy tiếp nhánh dự phòng dưới đây
+        console.warn('Chưa có RPC accept_booking_with_escrow, dùng nhánh dự phòng client-side.');
+      } catch (rpcEx) {
+        console.warn('RPC accept exception, dùng nhánh dự phòng:', rpcEx);
+      }
+    }
 
     // Lấy số dư ví mới nhất trực tiếp từ Supabase Cloud để đối soát tức thời
     let userWallet = wallets[currentUser.id];
@@ -639,7 +767,10 @@ export default function Home() {
             status: 'CONFIRMED',
             updated_at: now,
           })
-          .eq('id', bookingId);
+          .eq('id', bookingId)
+          // Ràng buộc status='PENDING' để hai thầy thuốc bấm nhận cùng lúc thì
+          // chỉ người đầu tiên ghi được, giữ đúng cô lập 1-1
+          .eq('status', 'PENDING');
 
         await supabase.from('wallet_transactions').insert([newTx]);
       } catch (err) {
@@ -660,8 +791,43 @@ export default function Home() {
     treat: string,
     adv: string
   ): Promise<boolean> => {
+    markMutation();
     const targetBooking = bookings.find((b) => b.id === bookingId);
     if (!targetBooking || !currentUser) return false;
+
+    // =====================================================================
+    // ƯU TIÊN RPC NGUYÊN TỬ complete_booking_and_deduct_commission
+    // RPC khóa dòng (FOR UPDATE), kiểm tra trạng thái hợp lệ, lưu bệnh án 3 mục,
+    // quyết toán phí từ khoản tạm giữ và tăng completed_jobs trong 1 transaction.
+    // =====================================================================
+    if (isSupabaseConfigured) {
+      try {
+        const { error: rpcErr } = await supabase.rpc('complete_booking_and_deduct_commission', {
+          p_booking_id: bookingId,
+          p_practitioner_id: currentUser.id,
+          p_diagnosis: diag,
+          p_treatment: treat,
+          p_advice: adv,
+        });
+
+        if (!rpcErr) {
+          markMutation();
+          await syncSupabaseDataQuietly();
+          return true;
+        }
+
+        if (rpcErr.code !== 'PGRST202') {
+          console.error('RPC complete_booking_and_deduct_commission từ chối:', rpcErr);
+          markMutation();
+          await syncSupabaseDataQuietly();
+          return false;
+        }
+
+        console.warn('Chưa có RPC complete_booking..., dùng nhánh dự phòng client-side.');
+      } catch (rpcEx) {
+        console.warn('RPC complete exception, dùng nhánh dự phòng:', rpcEx);
+      }
+    }
 
     const now = new Date().toISOString();
     const userWallet = wallets[currentUser.id];
@@ -774,6 +940,7 @@ export default function Home() {
     cancelledByRole: 'PATIENT' | 'PRACTITIONER' | 'ADMIN',
     reason?: string
   ): Promise<{ success: boolean; message?: string }> => {
+    markMutation();
     const target = bookings.find((b) => b.id === bookingId);
     if (!target) return { success: false, message: 'Không tìm thấy ca khám.' };
     if (target.status === 'COMPLETED') return { success: false, message: 'Ca khám đã hoàn tất không thể hủy.' };
@@ -789,6 +956,56 @@ export default function Home() {
         : cancelledByRole === 'ADMIN'
         ? 'Admin điều phối hủy đơn'
         : 'Bệnh nhân có việc bận đột xuất');
+
+    // =====================================================================
+    // ƯU TIÊN RPC NGUYÊN TỬ cancel_booking_and_refund_lock
+    // RPC hoàn trả 100% phí tạm giữ, ghi cancelled_at + cancel_reason +
+    // cancelled_by_role và chống hủy/hoàn tiền hai lần, tất cả trong 1 transaction.
+    // Trước đây nhánh dự phòng chỉ UPDATE status mà KHÔNG hoàn tiền, nên đã có
+    // đơn bị hủy mà tiền tạm giữ của Thầy thuốc bị giam vĩnh viễn.
+    // =====================================================================
+    if (isSupabaseConfigured) {
+      try {
+        const { error: rpcErr } = await supabase.rpc('cancel_booking_and_refund_lock', {
+          p_booking_id: bookingId,
+          p_cancelled_by_role: cancelledByRole,
+          p_cancel_reason: finalReason,
+        });
+
+        if (!rpcErr) {
+          setBookings((prev) =>
+            prev.map((b) =>
+              b.id === bookingId
+                ? {
+                    ...b,
+                    status: newStatus,
+                    cancelled_at: nowIso,
+                    cancel_reason: finalReason,
+                    updated_at: nowIso,
+                  }
+                : b
+            )
+          );
+          markMutation();
+          await syncSupabaseDataQuietly();
+          return {
+            success: true,
+            message: `Đã hủy lịch khám ${target.booking_code} thành công (Hoàn 100% phí tạm giữ, không phạt cọc).`,
+          };
+        }
+
+        if (rpcErr.code !== 'PGRST202') {
+          console.error('RPC cancel_booking_and_refund_lock từ chối:', rpcErr);
+          markMutation();
+          await syncSupabaseDataQuietly();
+          return { success: false, message: rpcErr.message };
+        }
+
+        console.warn('Chưa có RPC cancel_booking..., dùng nhánh dự phòng client-side.');
+      } catch (rpcEx) {
+        console.warn('RPC cancel exception, dùng nhánh dự phòng:', rpcEx);
+      }
+    }
 
     // Refund locked commission if it was locked
     if (
@@ -838,50 +1055,72 @@ export default function Home() {
       )
     );
 
-    // Lưu vĩnh viễn lên Supabase Cloud
+    // NHÁNH DỰ PHÒNG (chỉ chạy khi Supabase chưa có hàm RPC).
+    // Phải ghi CẢ hoàn tiền ví, không chỉ đổi status - trước đây nhánh này chỉ
+    // UPDATE status nên tiền tạm giữ của Thầy thuốc bị giam vĩnh viễn.
     if (isSupabaseConfigured) {
       try {
-        const { error: rpcErr } = await supabase.rpc('cancel_booking_and_refund_lock', {
-          p_booking_id: bookingId,
-          p_cancelled_by_role: cancelledByRole,
-          p_cancel_reason: finalReason,
-        });
+        const { error: directErr } = await supabase
+          .from('bookings')
+          .update({
+            status: newStatus,
+            cancelled_at: nowIso,
+            cancel_reason: finalReason,
+            cancelled_by_role: cancelledByRole,
+            updated_at: nowIso,
+          })
+          .eq('id', bookingId);
 
-        if (rpcErr) {
-          console.warn('Supabase RPC cancel failed, attempting direct table update:', rpcErr);
-          const { error: directErr } = await supabase
-            .from('bookings')
-            .update({
-              status: newStatus,
-              cancelled_at: nowIso,
-              cancel_reason: finalReason,
-              updated_at: nowIso,
-            })
-            .eq('id', bookingId);
+        if (directErr) {
+          console.error('Supabase direct cancel error:', directErr);
+          return {
+            success: false,
+            message: `Lỗi cập nhật trạng thái hủy trên Supabase: ${directErr.message}`,
+          };
+        }
 
-          if (directErr) {
-            console.error('Supabase direct cancel error:', directErr);
-            return {
-              success: false,
-              message: `Lỗi cập nhật trạng thái hủy trên Supabase: ${directErr.message}`,
-            };
+        // Hoàn trả 100% phí tạm giữ về ví Thầy thuốc (không phạt cọc)
+        if (
+          ['CONFIRMED', 'ON_THE_WAY', 'IN_PROGRESS'].includes(target.status) &&
+          target.practitioner_id
+        ) {
+          const docWallet = wallets[target.practitioner_id];
+          if (docWallet) {
+            const refundedAvail = Number(docWallet.available_balance || 0) + target.commission_amount;
+            const refundedLock = Math.max(
+              0,
+              Number(docWallet.locked_balance || 0) - target.commission_amount
+            );
+
+            const { error: wErr } = await supabase
+              .from('wallets')
+              .update({
+                available_balance: refundedAvail,
+                locked_balance: refundedLock,
+                updated_at: nowIso,
+              })
+              .eq('id', docWallet.id);
+            if (wErr) console.error('Supabase refund wallet error:', wErr);
+
+            const { error: txErr } = await supabase.from('wallet_transactions').insert([
+              {
+                id: generateUUID(),
+                wallet_id: docWallet.id,
+                booking_id: bookingId,
+                amount: target.commission_amount,
+                type: 'REFUND_LOCK',
+                balance_after: refundedAvail,
+                description: `Hoàn trả 100% phí tạm giữ do hủy đơn ${target.booking_code} (Không phạt cọc)`,
+                created_at: nowIso,
+              },
+            ]);
+            if (txErr) console.error('Supabase refund tx error:', txErr);
           }
         }
       } catch (err: unknown) {
-        console.warn('Supabase cancel exception, attempting direct fallback:', err);
-        try {
-          await supabase
-            .from('bookings')
-            .update({
-              status: newStatus,
-              cancelled_at: nowIso,
-              cancel_reason: finalReason,
-              updated_at: nowIso,
-            })
-            .eq('id', bookingId);
-        } catch (fallbackErr) {
-          console.error('Fallback direct update failed:', fallbackErr);
-        }
+        console.error('Supabase cancel fallback exception:', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, message: `Lỗi kết nối khi hủy đơn: ${msg}` };
       }
     }
 
@@ -893,6 +1132,7 @@ export default function Home() {
 
   // 7. Check-in GPS (Lưu Supabase tức thời)
   const handleCheckInGPS = async (bookingId: string, lat: number, lng: number, distance: number) => {
+    markMutation();
     const now = new Date().toISOString();
     setBookings((prev) =>
       prev.map((b) =>
@@ -927,6 +1167,7 @@ export default function Home() {
 
   // 8. Update status (Lưu Supabase tức thời)
   const handleUpdateStatus = async (bookingId: string, status: Booking['status']) => {
+    markMutation();
     const now = new Date().toISOString();
     setBookings((prev) =>
       prev.map((b) => (b.id === bookingId ? { ...b, status, updated_at: now } : b))
@@ -946,6 +1187,7 @@ export default function Home() {
 
   // 9. Submit review (Lưu Supabase tức thời)
   const handleSubmitReview = async (bookingId: string, rating: number, review: string) => {
+    markMutation();
     const now = new Date().toISOString();
     setBookings((prev) =>
       prev.map((b) =>
@@ -973,6 +1215,7 @@ export default function Home() {
 
   // 10. Deposit to wallet (Tự động tạo ví nếu chưa có & Lưu Supabase Cloud tức thời)
   const handleDepositWallet = async (amount: number, customUserId?: string) => {
+    markMutation();
     const targetUserId = customUserId || currentUser?.id;
     if (!targetUserId) return;
 
@@ -1079,8 +1322,9 @@ export default function Home() {
   };
 
   // 11. Toggle Online status
-  const handleToggleOnline = (isOnline: boolean) => {
+  const handleToggleOnline = async (isOnline: boolean) => {
     if (!currentUser) return;
+    markMutation();
     setPractitioners((prev) => {
       const cur = prev[currentUser.id];
       if (!cur) return prev;
@@ -1097,7 +1341,17 @@ export default function Home() {
     }
 
     if (isSupabaseConfigured) {
-      supabase.from('practitioner_profiles').update({ is_online: isOnline, updated_at: new Date().toISOString() }).eq('user_id', currentUser.id);
+      // BẮT BUỘC await: PostgrestBuilder của Supabase là lazy, chỉ gửi request khi
+      // .then() được gọi. Thiếu await thì lệnh ghi này không bao giờ rời khỏi máy.
+      try {
+        const { error } = await supabase
+          .from('practitioner_profiles')
+          .update({ is_online: isOnline, updated_at: new Date().toISOString() })
+          .eq('user_id', currentUser.id);
+        if (error) console.error('Supabase toggle online error:', error);
+      } catch (err) {
+        console.error('Supabase toggle online exception:', err);
+      }
     }
   };
 
@@ -1107,7 +1361,12 @@ function isValidUUID(str?: string | null): boolean {
 }
 
 // 12. Admin verify eKYC & Phê duyệt Thầy thuốc mới (Cập nhật Role & Tạo dữ liệu Supabase nếu chưa có)
-  const handleVerifyPractitioner = async (userId: string, isVerified: boolean) => {
+  const handleVerifyPractitioner = async (
+    userId: string,
+    isVerified: boolean,
+    rejectionReason?: string
+  ) => {
+    markMutation();
     const now = new Date().toISOString();
     const targetProfile = profiles.find((p) => p.id === userId);
     const targetPractitioner = practitioners[userId];
@@ -1190,7 +1449,8 @@ function isValidUUID(str?: string | null): boolean {
             base_service_fee: targetPractitioner?.base_service_fee || 400000,
             commission_rate: targetPractitioner?.commission_rate || 15.0,
             is_verified: isVerified,
-            rejection_reason: null,
+            verified_at: isVerified ? now : null,
+            rejection_reason: isVerified ? null : rejectionReason || null,
             is_online: isVerified,
             current_lat: targetPractitioner?.current_lat || 10.7769,
             current_lng: targetPractitioner?.current_lng || 106.7009,
@@ -1207,12 +1467,16 @@ function isValidUUID(str?: string | null): boolean {
             return { success: false, message: `Lỗi tạo thông tin CCHN trên Supabase: ${insPracErr.message}` };
           }
         } else {
-          // Đã có -> Cập nhật is_verified & is_online
+          // Đã có -> Cập nhật is_verified & is_online.
+          // Ghi thêm mốc thời gian duyệt (verified_at) và lý do từ chối
+          // (rejection_reason) để Admin tra cứu, đối soát pháp lý về sau.
           const { error: updPracErr } = await supabase
             .from('practitioner_profiles')
             .update({
               is_verified: isVerified,
               is_online: isVerified,
+              verified_at: isVerified ? now : null,
+              rejection_reason: isVerified ? null : rejectionReason || 'Admin từ chối hồ sơ CCHN',
               updated_at: now,
             })
             .eq('user_id', userId);
@@ -1355,8 +1619,45 @@ function isValidUUID(str?: string | null): boolean {
     };
   };
 
-  // 13. Admin Reassign doctor
-  const handleReassignDoctor = (bookingId: string, newDoctorId: string) => {
+  // 13. Admin Reassign doctor (Điều phối đổi Thầy thuốc + chuyển phí tạm giữ nguyên tử)
+  // Trước đây hàm này chỉ đổi state cục bộ và gọi supabase KHÔNG await (lệnh ghi không
+  // bao giờ được gửi), đồng thời không chuyển tiền tạm giữ: thầy thuốc cũ bị giam tiền
+  // vĩnh viễn còn thầy thuốc mới nhận ca miễn phí phí nền tảng.
+  const handleReassignDoctor = async (
+    bookingId: string,
+    newDoctorId: string
+  ): Promise<{ success: boolean; message?: string }> => {
+    const target = bookings.find((b) => b.id === bookingId);
+    if (!target) return { success: false, message: 'Không tìm thấy ca khám để điều phối.' };
+
+    markMutation();
+
+    if (isSupabaseConfigured) {
+      try {
+        const { error } = await supabase.rpc('reassign_booking_to_practitioner', {
+          p_booking_id: bookingId,
+          p_new_practitioner_id: newDoctorId || null,
+          p_reason: null,
+        });
+
+        if (error) {
+          console.error('Supabase reassign RPC error:', error);
+          return {
+            success: false,
+            message:
+              error.code === 'PGRST202'
+                ? 'Chưa có hàm RPC reassign_booking_to_practitioner trên Supabase. Vui lòng chạy file supabase/migration-fix-logic.sql trong SQL Editor.'
+                : `Không điều phối được: ${error.message}`,
+          };
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, message: `Lỗi kết nối khi điều phối: ${msg}` };
+      }
+    }
+
+    // Chỉ cập nhật state sau khi Supabase đã xác nhận ghi thành công
+    const now = new Date().toISOString();
     setBookings((prev) =>
       prev.map((b) =>
         b.id === bookingId
@@ -1364,19 +1665,28 @@ function isValidUUID(str?: string | null): boolean {
               ...b,
               practitioner_id: newDoctorId || null,
               status: newDoctorId ? 'CONFIRMED' : 'PENDING',
-              updated_at: new Date().toISOString(),
+              updated_at: now,
             }
           : b
       )
     );
 
+    // Đọc lại ví & sổ cái để số dư tạm giữ của cả 2 thầy thuốc hiển thị đúng ngay
     if (isSupabaseConfigured) {
-      supabase.from('bookings').update({
-        practitioner_id: newDoctorId || null,
-        status: newDoctorId ? 'CONFIRMED' : 'PENDING',
-        updated_at: new Date().toISOString(),
-      }).eq('id', bookingId);
+      markMutation();
+      await syncSupabaseDataQuietly();
     }
+
+    const newDoctorName = newDoctorId
+      ? profiles.find((p) => p.id === newDoctorId)?.full_name || 'Thầy thuốc mới'
+      : null;
+
+    return {
+      success: true,
+      message: newDoctorName
+        ? `Đã điều phối ca ${target.booking_code} sang ${newDoctorName}. Phí tạm giữ của thầy thuốc cũ đã được hoàn 100% (không phạt cọc).`
+        : `Đã thu hồi ca ${target.booking_code} về danh sách đơn tự do và hoàn 100% phí tạm giữ cho thầy thuốc cũ.`,
+    };
   };
 
   // 14. Reset Password (with custom or default password)
@@ -1384,6 +1694,7 @@ function isValidUUID(str?: string | null): boolean {
     userId: string,
     newPassword?: string
   ): Promise<{ success: boolean; message?: string }> => {
+    markMutation();
     const pwd = newPassword && newPassword.trim() ? newPassword.trim() : '123456';
     const targetUser = profiles.find((p) => p.id === userId);
     const targetName = targetUser ? targetUser.full_name : 'người dùng';
@@ -1527,6 +1838,7 @@ function isValidUUID(str?: string | null): boolean {
     practitioner?: Partial<PractitionerProfile>;
     initialBalance?: number;
   }): Promise<{ success: boolean; message?: string }> => {
+    markMutation();
     const trimmedPhone = data.profile.phone.trim();
     const existing = profiles.find((p) => p.phone.trim() === trimmedPhone);
     if (existing) {
@@ -1603,7 +1915,7 @@ function isValidUUID(str?: string | null): boolean {
       };
     }
 
-    if (isLiveConnected) {
+    if (isSupabaseConfigured) {
       try {
         const { error: pErr } = await supabase.from('profiles').insert([newProfile]);
         if (pErr) {
@@ -1655,7 +1967,7 @@ function isValidUUID(str?: string | null): boolean {
       setWallets((prev) => ({ ...prev, [newId]: newWallet! }));
     }
 
-    if (isLiveConnected) {
+    if (isSupabaseConfigured) {
       await checkSupabaseConnection();
     }
 
@@ -1673,6 +1985,7 @@ function isValidUUID(str?: string | null): boolean {
       practitioner?: Partial<PractitionerProfile>;
     }
   ): Promise<{ success: boolean; message?: string }> => {
+    markMutation();
     // 1. Kiểm tra số điện thoại bị trùng với tài khoản khác
     if (data.profile.phone) {
       const cleanPhone = data.profile.phone.trim();
@@ -1885,7 +2198,7 @@ function isValidUUID(str?: string | null): boolean {
       }));
     }
 
-    if (isLiveConnected) {
+    if (isSupabaseConfigured) {
       await checkSupabaseConnection();
     }
 
@@ -1896,6 +2209,7 @@ function isValidUUID(str?: string | null): boolean {
   const handleDeleteUser = async (
     userId: string
   ): Promise<{ success: boolean; message?: string }> => {
+    markMutation();
     if (currentUser?.id === userId) {
       return { success: false, message: 'Không thể tự xóa tài khoản Quản trị viên đang đăng nhập!' };
     }
@@ -1916,7 +2230,7 @@ function isValidUUID(str?: string | null): boolean {
       };
     }
 
-    if (isLiveConnected) {
+    if (isSupabaseConfigured) {
       try {
         const { error: delErr } = await supabase.from('profiles').delete().eq('id', userId);
         if (delErr) {
@@ -1945,15 +2259,92 @@ function isValidUUID(str?: string | null): boolean {
       return copy;
     });
 
-    if (isLiveConnected) {
+    if (isSupabaseConfigured) {
       await checkSupabaseConnection();
     }
 
     return { success: true, message: `Đã xóa tài khoản ${userName} thành công.` };
   };
 
+  // 14e. Admin điều chỉnh % phí nền tảng (trước đây chỉ đổi state cục bộ, không hề
+  // ghi xuống Supabase nên bị polling 5 giây kéo về giá trị cũ ngay sau đó)
+  const handleUpdateCommissionRate = async (
+    userId: string,
+    newRate: number
+  ): Promise<{ success: boolean; message?: string }> => {
+    if (!Number.isFinite(newRate) || newRate < 0 || newRate > 100) {
+      return { success: false, message: 'Phần trăm phí nền tảng phải nằm trong khoảng 0 - 100.' };
+    }
+
+    markMutation();
+    const now = new Date().toISOString();
+
+    if (isSupabaseConfigured) {
+      try {
+        const { error } = await supabase
+          .from('practitioner_profiles')
+          .update({ commission_rate: newRate, updated_at: now })
+          .eq('user_id', userId);
+
+        if (error) {
+          console.error('Supabase update commission_rate error:', error);
+          return { success: false, message: `Lỗi lưu % phí nền tảng: ${error.message}` };
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, message: `Lỗi kết nối khi lưu % phí nền tảng: ${msg}` };
+      }
+    }
+
+    setPractitioners((prev) => {
+      const cur = prev[userId];
+      if (!cur) return prev;
+      return {
+        ...prev,
+        [userId]: { ...cur, commission_rate: newRate, updated_at: now },
+      };
+    });
+
+    return { success: true, message: `Đã lưu phí nền tảng ${newRate}% lên Supabase.` };
+  };
+
   // 15. Adjust Wallet by Admin (Tự động tạo ví nếu chưa có & Lưu Supabase)
   const handleAdjustWallet = async (userId: string, amount: number) => {
+    markMutation();
+
+    // =====================================================================
+    // ƯU TIÊN RPC admin_adjust_wallet: cộng/trừ TƯƠNG ĐỐI trong 1 transaction,
+    // tự tạo ví nếu chưa có và CHẶN làm số dư âm (vi phạm CHECK của bảng wallets).
+    // Cách cũ đọc số dư rồi ghi đè giá trị tuyệt đối nên hai thao tác đồng thời
+    // sẽ làm mất một lần cập nhật (lost update) - đây là nguồn gốc lệch ví.
+    // =====================================================================
+    if (isSupabaseConfigured) {
+      try {
+        const { error: rpcErr } = await supabase.rpc('admin_adjust_wallet', {
+          p_user_id: userId,
+          p_amount: amount,
+          p_description: `Admin điều chỉnh số dư ví (${amount >= 0 ? '+' : ''}${formatVND(amount)})`,
+        });
+
+        if (!rpcErr) {
+          markMutation();
+          await syncSupabaseDataQuietly();
+          return;
+        }
+
+        if (rpcErr.code !== 'PGRST202') {
+          console.error('RPC admin_adjust_wallet từ chối:', rpcErr);
+          markMutation();
+          await syncSupabaseDataQuietly();
+          return;
+        }
+
+        console.warn('Chưa có RPC admin_adjust_wallet, dùng nhánh dự phòng client-side.');
+      } catch (rpcEx) {
+        console.warn('RPC adjust wallet exception, dùng nhánh dự phòng:', rpcEx);
+      }
+    }
+
     const now = new Date().toISOString();
     let userWallet = wallets[userId];
 
@@ -2193,24 +2584,15 @@ function isValidUUID(str?: string | null): boolean {
             onCreateUser={handleCreateUser}
             onUpdateUser={handleUpdateUser}
             onDeleteUser={handleDeleteUser}
-            onUpdateCommissionRate={(userId, newRate) => {
-              setPractitioners((prev) => {
-                const cur = prev[userId];
-                if (!cur) return prev;
-                return {
-                  ...prev,
-                  [userId]: { ...cur, commission_rate: newRate },
-                };
-              });
-            }}
+            onUpdateCommissionRate={handleUpdateCommissionRate}
           />
         )}
       </div>
 
       {/* SUPABASE STATUS & SETUP MODAL */}
       {showDbModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95 my-auto max-h-[90vh] overflow-y-auto scrollbar-slim">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">

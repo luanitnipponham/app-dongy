@@ -7,7 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:layers": "node src/scripts/verify-7-layers.js"
+    "test:layers": "node src/scripts/verify-7-layers.js",
+    "test:flow": "node src/scripts/verify-business-flow.js",
+    "test:clock": "node src/scripts/verify-clock.js",
+    "reconcile:wallets": "node src/scripts/reconcile-wallets.js",
+    "test:columns": "node src/scripts/verify-columns.js",
+    "audit:columns": "node src/scripts/audit-columns.js"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

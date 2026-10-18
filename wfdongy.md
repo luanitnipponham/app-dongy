@@ -481,7 +481,7 @@ Bạn hãy copy **lần lượt từng Prompt dưới đây** dán vào khung ch
 >    - Thầy thuốc X **CHỈ ĐƯỢC NHÌN THẤY** các đơn khám có `practitioner_id === currentUser.id` (bệnh nhân chọn đích danh mình) HOẶC các đơn tự do chưa chọn ai (`practitioner_id === null` và `status === 'PENDING'`). Tuyệt đối không hiển thị các đơn mà bệnh nhân đã chọn đích danh Thầy thuốc Y!
 > 3. **Khi `is_verified === true`, hiển thị 3 tab chuyên nghiệp:**
 >    - **Tab 1: Ca Khám & Bệnh Án:**
->      + Khi đơn ở trạng thái `PENDING`: Hiển thị minh bạch kiểu Grab: `Thu tiền mặt khách: ...đ` | `Phụ phí xăng xe (hưởng 100%): ...đ` | `Phí nền tảng (15%): ...đ`. SĐT bệnh nhân được che (`0901***567`) cho đến khi bấm nút **'Nhận Ca Khám'** (gọi RPC `accept_booking_with_escrow`).
+>      + Khi đơn ở trạng thái `PENDING`: Hiển thị minh bạch kiểu Grab: `Thu tiền mặt khách: ...đ`. SĐT bệnh nhân được che (`0901***567`) cho đến khi bấm nút **'Nhận Ca Khám'** (gọi RPC `accept_booking_with_escrow`).
 >      + Ngay sau khi bấm Nhận Ca Khám (`CONFIRMED` / `ON_THE_WAY` / `IN_PROGRESS`): Mở khóa đầy đủ SĐT bệnh nhân, hiện nút **'Gọi Điện'**, **'Nhắn Zalo'**, và nổi bật nhất là nút lớn **'Mở Google Maps Chỉ Đường Miễn Phí'** (mở tab mới với `getGoogleMapsDirectionsUrl(booking.address, booking.lat, booking.lng)` để tự bật app Google Maps trên điện thoại dẫn đường đến tận địa chỉ bệnh nhân).
 >      + Có nút **'Check-in GPS đến nhà bệnh nhân'** (ghi nhận GPS mềm, không chặn cứng) và **Form Bệnh Án 3 Mục** (1. Chẩn đoán bệnh, 2. Thủ thuật & Đơn thuốc, 3. Lời dặn dò & Ngày tái khám) kèm nút **'Hoàn Tất Ca Khám'** (gọi RPC `complete_booking_and_deduct_commission`). Nút **'BÁO BẬN / HỦY CA' ĐƯỢC IN ĐẬM NỔI BẬT** (Cơ chế an toàn bảo vệ Bác sĩ/Thầy thuốc: Khi phát hiện Bệnh nhân có dấu hiệu lừa đảo, không an toàn hoặc có việc bận khẩn cấp -> Cho phép HỦY CA NGAY để bảo vệ bản thân, hệ thống lập tức hoàn trả 100% tiền tạm giữ về ví tín dụng, tuyệt đối không phạt cọc).
 >    - **Tab 2: Ví Tín Dụng Liên Kết & VietQR:** Hiển thị Số dư khả dụng, Số tiền đang tạm giữ, bảng kê chiết khấu từng ca và tạo mã QR nạp tiền tự động bằng `getVietQRUrl` (kèm nút mô phỏng nạp tiền thành công để test ngay).
@@ -496,3 +496,167 @@ Bạn hãy copy **lần lượt từng Prompt dưới đây** dán vào khung ch
 
 ### [PROMPT BƯỚC 6]: Ghép nối toàn bộ vào `src/app/page.tsx`, Bật Realtime & Kiểm tra Build
 > "Hãy cập nhật file `src/app/page.tsx` để kết nối hoàn chỉnh `AuthPortal`, `PatientView`, `PractitionerView`, và `AdminView` với dữ liệu Supabase (kèm cơ chế Fallback thông minh sang State đồng bộ nếu chưa cấu hình biến môi trường để không bao giờ bị lỗi màn hình trắng). Thêm một thanh Header nhỏ ở trên cùng khi đã đăng nhập hiển thị Tên tài khoản hiện tại, Vai trò, nút **'Chuyển nhanh tài khoản Test (Bệnh nhân An / Lương y Đức / BS. Mai / BS. Tuấn chờ duyệt / Admin)'** để kiểm chứng ngay lập tức quy tắc: *Khi Bệnh nhân An chọn Lương y Đức thì chỉ An và Đức thấy đơn của nhau, BS. Mai hoàn toàn không thấy, còn Admin thấy tất cả*. Cuối cùng, hãy chạy `npm run build` để kiểm tra và sửa sạch mọi lỗi TypeScript nếu có."
+---
+
+## PHẦN 5: CẬP NHẬT ĐẶC TẢ SAU ĐỢT RÀ SOÁT LOGIC (18/10/2026)
+
+> Phần này ghi lại những điểm đặc tả gốc **bị sai hoặc còn thiếu**, đã được sửa
+> trong mã nguồn và kiểm chứng bằng bộ kiểm thử tự động. Khi có mâu thuẫn, **lấy
+> PHẦN 5 làm chuẩn**, các phần trên chỉ còn giá trị tham khảo lịch sử.
+
+### 5.1. Mọi thao tác tiền bạc BẮT BUỘC đi qua RPC, cấm tính bằng JavaScript
+
+Đặc tả gốc mô tả 3 hàm RPC nhưng mã nguồn lại tự cộng trừ số dư ở phía trình duyệt
+rồi ghi đè giá trị tuyệt đối. Hậu quả thực tế đã xảy ra: hai thao tác đồng thời làm
+mất một lần cập nhật, số dư tạm giữ lệch tới **555.000đ**, và lệnh nhận ca không
+ràng buộc `status = 'PENDING'` nên hai Thầy thuốc bấm cùng lúc đều bị trừ tiền.
+
+**Quy tắc bắt buộc:**
+
+| Nghiệp vụ | RPC phải gọi |
+| :--- | :--- |
+| Nhận ca | `accept_booking_with_escrow` |
+| Hoàn tất & lưu bệnh án | `complete_booking_and_deduct_commission` |
+| Hủy ca (mọi vai trò) | `cancel_booking_and_refund_lock` |
+| Admin điều phối đổi Thầy thuốc | `reassign_booking_to_practitioner` **(mới)** |
+| Admin cộng/trừ ví | `admin_adjust_wallet` **(mới)** |
+| Lấy giờ chuẩn | `get_server_time` **(mới)** |
+
+Nhánh dự phòng client-side chỉ được chạy khi RPC chưa tồn tại (lỗi `PGRST202`),
+và cũng phải ghi đủ cả hoàn tiền ví chứ không chỉ đổi trạng thái.
+
+### 5.2. Admin điều phối đổi Thầy thuốc phải CHUYỂN phí tạm giữ
+
+Đặc tả gốc chỉ nói "cho phép Admin gán lại `practitioner_id`" mà không nói gì tới
+tiền. Làm đúng như vậy thì Thầy thuốc cũ bị giam tiền vĩnh viễn còn Thầy thuốc mới
+nhận ca miễn phí phí nền tảng.
+
+**Quy tắc đúng** (RPC `reassign_booking_to_practitioner`, nguyên tử trong 1 transaction):
+
+1. Thẩm định CCHN của Thầy thuốc được điều phối tới — chưa duyệt thì từ chối.
+2. Khóa phí nền tảng trong ví Thầy thuốc MỚI — ví không đủ thì từ chối cả thao tác.
+3. Hoàn trả 100% cho Thầy thuốc CŨ (không phạt cọc).
+4. Gán lại đơn. Truyền `NULL` để thu hồi đơn về danh sách đơn tự do.
+
+### 5.3. Ghi nhận ĐÚNG người hủy đơn
+
+Bảng `bookings` bổ sung cột `cancelled_by_role` (`PATIENT` | `PRACTITIONER` | `ADMIN`).
+Trước đây Admin hủy đơn bị lưu thành `CANCELLED_DOCTOR`, làm sai số liệu đối soát và
+oan cho Thầy thuốc. Hàm hủy cũng chống hủy/hoàn tiền hai lần.
+
+### 5.4. Che địa chỉ, không chỉ che số điện thoại
+
+Khi đơn ở trạng thái `PENDING`, ngoài số điện thoại thì **địa chỉ chi tiết cũng phải
+được che**, chỉ hiện khu vực (Phường/Quận/Tỉnh). Mở khóa đầy đủ ngay sau khi bấm
+"Nhận Ca Khám". Đặc tả gốc đã nêu yêu cầu này nhưng mã nguồn hiển thị nguyên địa chỉ.
+
+### 5.5. Không hiển thị phí nền tảng cho Bệnh nhân
+
+Phân hệ Bệnh nhân **chỉ hiển thị đúng số tiền khách phải trả**. Tuyệt đối không in
+giá dịch vụ tách riêng kèm phí nền tảng, vì từ đó Bệnh nhân tính ra được thu nhập
+thực nhận của Thầy thuốc, dễ dẫn tới mặc cả ngoài luồng — đúng thứ mà nguyên tắc
+chống "đi đêm" đang ngăn. Bảng kê chiết khấu đầy đủ chỉ có ở phân hệ Thầy thuốc
+(người bị trừ tiền) và Admin (người đối soát).
+
+### 5.6. Ca làm việc của Thầy thuốc: 08:00 - 20:00 (giờ Việt Nam)
+
+Bệnh nhân chỉ được đặt lịch trong khung này; 20:00 là mốc **bắt đầu** khám muộn nhất.
+Ràng buộc ở 5 lớp: giá trị mặc định tự đẩy vào ca, `min`/`max` trên ô nhập, cảnh báo
+tức thì khi chọn sai, nút sửa 1 chạm, và chặn lại lúc gửi biểu mẫu.
+
+### 5.7. Chống đặt trùng giờ Thầy thuốc
+
+Khi Bệnh nhân chọn đích danh một Thầy thuốc đã kín lịch, form báo ngay và **không cho
+tạo đơn**, kèm gợi ý các khung giờ còn trống. Mục đích: không sinh ra đơn `PENDING`
+nằm im không ai trả lời. Hai ca coi là chồng nhau khi cách nhau ít hơn
+*(thời lượng dịch vụ + 30 phút di chuyển)*, tính cả đơn `PENDING` đang giữ chỗ.
+
+Phía Thầy thuốc, mỗi đơn chờ nhận hiển thị khung **Lịch hẹn khám** nổi bật kèm đếm
+ngược và cảnh báo nếu trùng với ca đang phụ trách — vì bấm "Nhận Ca" là bị khóa tiền.
+
+### 5.8. Đồng hồ lấy từ SERVER, không tin đồng hồ thiết bị
+
+Điện thoại/máy tính có thể sai giờ hoặc sai múi giờ. Mọi tính toán liên quan tới
+lịch hẹn phải dùng `serverNow()` trong `src/lib/server-clock.ts`:
+
+- Gọi RPC `get_server_time()`, bù một nửa thời gian khứ hồi, lưu **độ lệch**.
+- Đồng bộ lại mỗi 5 phút, khi quay lại tab, và khi có mạng trở lại.
+- Mất mạng vẫn chính xác vì giữ nguyên độ lệch đã đồng bộ.
+
+Hiển thị **bắt buộc** ép `timeZone: 'Asia/Ho_Chi_Minh'`, và khi tạo đơn phải dùng
+hậu tố `+07:00` tường minh thay vì để JavaScript đoán theo máy.
+
+Giờ hẹn hiển thị kèm **mốc ngày tương đối** (`hôm nay` / `rạng sáng mai` / `ngày mai`
+/ `ngày kia`) để không bị hiểu nhầm quanh lúc nửa đêm.
+
+### 5.9. Polling 5 giây KHÔNG được ghi đè thao tác vừa thực hiện
+
+Vòng đồng bộ cũ tải `select('*')` toàn bộ bảng (ảnh CCHN dạng Base64 khiến mỗi lần
+tải **~2MB / 1,5 giây**) rồi **thay thế** nguyên state. Một phản hồi cũ về muộn sẽ
+kéo giao diện về trạng thái trước đó, làm Admin tưởng thao tác duyệt CCHN bị lỗi
+trong khi dữ liệu đã lưu đúng.
+
+**Quy tắc:** mỗi thao tác ghi đóng dấu thời gian (`markMutation()`); kết quả polling
+bắt đầu trước dấu đó bị loại bỏ. Vòng polling **không lấy `license_image_url`** và
+**merge** thay vì thay thế.
+
+### 5.10. Lệnh ghi Supabase BẮT BUỘC có `await`
+
+`PostgrestBuilder` của supabase-js là lazy — chỉ gửi request khi `.then()` được gọi.
+Thiếu `await` thì lệnh ghi **không bao giờ rời khỏi máy**. Lỗi này từng làm chức năng
+Admin điều phối và bật/tắt Online hoàn toàn không lưu được.
+
+### 5.11. Đăng ký tài khoản phải ghi DB THÀNH CÔNG rồi mới báo thành công
+
+Trước đây đăng nhập trước rồi ghi sau và nuốt lỗi, nên khi ghi hỏng thì tài khoản chỉ
+tồn tại trong bộ nhớ và bị vòng đồng bộ xóa sạch. Phải ghi Supabase trước, lỗi thì
+trả về thông báo rõ ràng; tạo hồ sơ Thầy thuốc hỏng thì dọn lại `profiles` vừa tạo.
+
+Ngoài ra, mọi nhánh ghi phải dùng chung một điều kiện `isSupabaseConfigured`, không
+trộn lẫn với biến trạng thái `isLiveConnected`.
+
+### 5.12. Giao diện: danh sách thu gọn + phân hạng mục
+
+Mọi danh sách dài dùng chung component `src/components/CollapsibleRow.tsx`: mỗi mục
+là **một dòng tiêu đề gọn**, bấm mới mở chi tiết (thuộc tính `dense` gộp tất cả lên
+một hàng). Kèm **bộ lọc theo hạng mục có đếm số**, **ô tìm kiếm** và **phân trang**.
+
+Áp dụng cho: Admin (đơn khám, thầy thuốc, user, dịch vụ, duyệt CCHN, sổ cái sàn),
+Thầy thuốc (ca đang phụ trách, sổ cái ví, lịch sử khám), Bệnh nhân (ca đang diễn ra,
+sổ bệnh án). Danh sách chọn Thầy thuốc chuyển thành **popup có tìm kiếm**.
+
+Giao diện khóa nền sáng (bỏ `prefers-color-scheme: dark` vì mọi thẻ đều nền trắng),
+đặt `min-width: 0` cho phần tử con của flex/grid để chuỗi dài không đẩy tràn lề
+ngang trên điện thoại, và mọi modal dùng `items-start sm:items-center` +
+`overflow-y-auto` để form cao hơn màn hình không bị cắt mất phần đầu.
+
+Nút nạp tiền thử nghiệm chỉ hiện ở môi trường phát triển (`NODE_ENV !== 'production'`).
+
+### 5.13. CẢNH BÁO BẢO MẬT CHƯA XỬ LÝ
+
+Hai điểm sau **chưa sửa**, cần xử lý trước khi có dữ liệu bệnh nhân thật:
+
+1. **RLS chỉ là hình thức.** Cả 6 bảng đều bật RLS nhưng policy là `USING (true)`
+   cho vai trò `public`, và `anon` có đủ quyền `SELECT/INSERT/UPDATE/DELETE`. Anon
+   key lộ công khai trong JavaScript trình duyệt, nên bất kỳ ai cũng đọc/sửa/xóa
+   được toàn bộ bệnh án, số điện thoại và ví. **Cô lập 1-1 hiện chỉ là lọc ở client.**
+2. **Mật khẩu lưu dạng plaintext** trong cột `password_hash`.
+
+### 5.14. Bộ kiểm thử
+
+| Lệnh | Nội dung |
+| :--- | :--- |
+| `npm run test:layers` | 7 tầng gốc: môi trường, DB, tài khoản, ví, cô lập, chống spam, build |
+| `npm run test:flow` | **39 ca nghiệp vụ** chạy thật trên Supabase: eKYC, escrow, điều phối, hủy/hoàn, cô lập 1-1, chống hoàn trùng |
+| `npm run test:clock` | **38 ca** về giờ: đếm ngược, múi giờ, mốc ngày tương đối, ca làm việc 8h-20h |
+| `npm run reconcile:wallets` | Đối soát tiền tạm giữ bị treo (mặc định chỉ xem, thêm `-- --apply` để ghi) |
+
+Bộ 7 tầng gốc **không phát hiện được** bất kỳ lỗi nào trong PHẦN 5 vì nó chỉ kiểm
+schema và biên dịch, không kiểm hành vi của tầng ghi dữ liệu.
+
+### 5.15. Tệp SQL cần chạy
+
+`supabase/migration-fix-logic.sql` — an toàn khi chạy lại nhiều lần. Nội dung: dọn
+hàm RPC bị trùng overload, bổ sung cột `cancelled_by_role` / `rejection_reason` /
+`verified_at`, tạo 3 RPC mới, thêm index cho các cột lọc nóng, tạo ví cho Thầy thuốc
+còn thiếu, và bật Realtime cho các bảng còn lại.

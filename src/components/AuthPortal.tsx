@@ -31,7 +31,7 @@ interface AuthPortalProps {
     phone: string;
     password: string;
     address: string;
-  }) => void;
+  }) => Promise<{ success: boolean; message?: string }> | void;
   onRegisterPractitioner: (data: {
     fullName: string;
     phone: string;
@@ -41,7 +41,7 @@ interface AuthPortalProps {
     licenseNumber: string;
     issuedBy: string;
     licenseImageUrl: string;
-  }) => void;
+  }) => Promise<{ success: boolean; message?: string }> | void;
 }
 
 export default function AuthPortal({
@@ -184,7 +184,7 @@ export default function AuthPortal({
     }
   };
 
-  const handleRegisterSubmit = (e: React.FormEvent) => {
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
     setSuccessMsg('');
@@ -207,12 +207,19 @@ export default function AuthPortal({
     }
 
     if (registerRole === 'PATIENT') {
-      onRegisterPatient({
+      // Chờ kết quả ghi Supabase rồi mới báo thành công. Trước đây báo thành công
+      // ngay lập tức kể cả khi dữ liệu chưa hề được lưu xuống cơ sở dữ liệu.
+      const res = await onRegisterPatient({
         fullName: regFullName.trim(),
         phone: cleanPhone,
         password: regPassword || '123456',
         address: regAddress.trim() || 'TP. Hồ Chí Minh',
       });
+
+      if (res && res.success === false) {
+        setErrorMsg(res.message || 'Không tạo được tài khoản Bệnh nhân. Vui lòng thử lại.');
+        return;
+      }
       setSuccessMsg('Đăng ký tài khoản Bệnh nhân thành công!');
     } else {
       if (!regLicenseNumber.trim()) {
@@ -229,7 +236,7 @@ export default function AuthPortal({
         .map((s) => s.trim())
         .filter(Boolean);
 
-      onRegisterPractitioner({
+      const res = await onRegisterPractitioner({
         fullName: regFullName.trim(),
         phone: cleanPhone,
         password: regPassword || '123456',
@@ -239,6 +246,11 @@ export default function AuthPortal({
         issuedBy: regIssuedBy.trim() || 'Sở Y Tế',
         licenseImageUrl: regLicenseImageUrl,
       });
+
+      if (res && res.success === false) {
+        setErrorMsg(res.message || 'Không tạo được hồ sơ Thầy thuốc. Vui lòng thử lại.');
+        return;
+      }
       setSuccessMsg('Đăng ký hồ sơ Thầy thuốc thành công! Hồ sơ đã được gửi đến Admin để thẩm định.');
     }
   };

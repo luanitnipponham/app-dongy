@@ -1,12 +1,13 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   LogOut,
   FileBadge,
   ShieldAlert,
   ShieldCheck,
   MapPin,
+  Lock,
   Phone,
   MessageCircle,
   Navigation,
@@ -39,11 +40,26 @@ import {
   formatVND,
   formatDateTime,
   maskPhoneNumber,
+  describeTimeUntil,
+  formatAppointmentLabel,
+  getAreaOnly,
   getVietQRUrl,
   getGoogleMapsDirectionsUrl,
   getCurrentDeviceLocation,
   calculateDistanceInMeters,
 } from '@/lib/utils-medical';
+import CollapsibleRow from './CollapsibleRow';
+
+/**
+ * Nút nạp tiền thử nghiệm chỉ bật ở môi trường phát triển.
+ * Trên Vercel (production) `NODE_ENV` là 'production' nên nút tự biến mất,
+ * không cần nhớ gỡ tay trước mỗi lần deploy.
+ * Muốn bật tạm trên bản thật để demo: đặt NEXT_PUBLIC_ALLOW_DEMO_DEPOSIT=true
+ */
+const ALLOW_DEMO_DEPOSIT =
+  process.env.NODE_ENV !== 'production' ||
+  process.env.NEXT_PUBLIC_ALLOW_DEMO_DEPOSIT === 'true';
+import { onClockSync } from '@/lib/server-clock';
 
 interface PractitionerViewProps {
   currentUser: Profile;
@@ -88,6 +104,18 @@ export default function PractitionerView({
 }: PractitionerViewProps) {
   const [activeTab, setActiveTab] = useState<'ACTIVE_JOBS' | 'WALLET' | 'HISTORY'>('ACTIVE_JOBS');
 
+  // Vẽ lại khi đồng hồ server đồng bộ xong và mỗi 30 giây, để số đếm ngược tới
+  // giờ hẹn của Thầy thuốc luôn khớp với màn hình Bệnh nhân.
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    const unsubscribe = onClockSync(() => forceTick((n) => n + 1));
+    const timer = setInterval(() => forceTick((n) => n + 1), 30000);
+    return () => {
+      unsubscribe();
+      clearInterval(timer);
+    };
+  }, []);
+
   // Medical Record Form State (Active booking)
   const [editingBookingId, setEditingBookingId] = useState<string | null>(null);
   const [diagnosis, setDiagnosis] = useState('');
@@ -97,6 +125,18 @@ export default function PractitionerView({
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
   // VietQR Modal State
+  // Lich su kham: thu gon tung ca cho de tra cuu
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+  // Ca dang phu trach: thu gon tung ca cho de kiem soat tren dien thoai
+  const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
+  // So cai vi: loc theo danh muc + phan trang cho khoi dai
+  const [txFilter, setTxFilter] = useState<'ALL' | 'DEPOSIT' | 'LOCK_COMMISSION' | 'DEDUCT_COMMISSION' | 'REFUND_LOCK'>('ALL');
+  const [txSearch, setTxSearch] = useState<string>('');
+  const [txVisibleCount, setTxVisibleCount] = useState<number>(8);
+  // Lich su kham: loc theo hang muc + tim kiem + phan trang
+  const [historyFilter, setHistoryFilter] = useState<'ALL' | 'COMPLETED' | 'CANCELLED_PATIENT' | 'CANCELLED_DOCTOR'>('ALL');
+  const [historySearch, setHistorySearch] = useState<string>('');
+  const [historyVisibleCount, setHistoryVisibleCount] = useState<number>(8);
   const [showQRModal, setShowQRModal] = useState(false);
   const [depositAmount, setDepositAmount] = useState(200000);
 
@@ -208,6 +248,107 @@ export default function PractitionerView({
       ['COMPLETED', 'CANCELLED_PATIENT', 'CANCELLED_DOCTOR'].includes(b.status)
   );
 
+  // ===== BÁO ĐƠN TỰ DO VỪA BỊ THẦY THUỐC KHÁC NHẬN MẤT =====
+  // Đơn tự do được phát cho TẤT CẢ Thầy thuốc đã duyệt CCHN, ai bấm nhận trước
+  // thì đơn thuộc về người đó và lập tức biến mất khỏi màn hình những người còn
+  // lại (đúng nguyên tắc cô lập 1-1). Trước đây đơn biến mất lặng lẽ nên Thầy
+  // thuốc tưởng hệ thống không báo đơn. Nay ghi nhận rõ ràng.
+  const prevPendingRef = useRef<Record<string, string>>({});
+  const [takenNotice, setTakenNotice] = useState<string[]>([]);
+  const pendingKey = pendingBookings.map((b) => b.id).join(',');
+
+  useEffect(() => {
+    const current: Record<string, string> = {};
+    pendingBookings.forEach((b) => {
+      current[b.id] = b.booking_code;
+    });
+
+    const prev = prevPendingRef.current;
+    const hadPrevious = Object.keys(prev).length > 0;
+    const vanished = Object.keys(prev).filter((id) => !current[id]);
+
+    if (hadPrevious && vanished.length > 0) {
+      // Bỏ qua đơn biến mất vì CHÍNH MÌNH vừa nhận (nó chuyển sang mục đang phụ trách)
+      const takenByOthers = vanished
+        .filter((id) => !activeJobs.some((j) => j.id === id))
+        .map((id) => prev[id]);
+
+      if (takenByOthers.length > 0) {
+        setTakenNotice((old) => [...new Set([...old, ...takenByOthers])].slice(-3));
+      }
+    }
+
+    prevPendingRef.current = current;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingKey]);
+
+  // ===== HỖ TRỢ QUYẾT ĐỊNH NHẬN CA =====
+  // Thầy thuốc cần thấy rõ NGÀY GIỜ hẹn khám và biết nó có đụng ca mình đang
+  // nhận hay không, trước khi bấm Nhận Ca (vì bấm là bị khóa phí nền tảng).
+  const TRAVEL_BUFFER_MINUTES = 30;
+
+  /** Đơn chờ này có đụng giờ với ca mình đang phụ trách không */
+  const findMyScheduleConflict = (b: Booking): Booking | null => {
+    const t = new Date(b.appointment_time).getTime();
+    if (Number.isNaN(t)) return null;
+    const windowMs = (60 + TRAVEL_BUFFER_MINUTES) * 60 * 1000;
+    return (
+      activeJobs.find((j) => {
+        if (j.id === b.id) return false;
+        const jt = new Date(j.appointment_time).getTime();
+        return !Number.isNaN(jt) && Math.abs(jt - t) < windowMs;
+      }) || null
+    );
+  };
+
+  // ===== LỊCH SỬ KHÁM: phân theo hạng mục kết thúc ca =====
+  const historyCounts = {
+    ALL: completedJobs.length,
+    COMPLETED: completedJobs.filter((b) => b.status === 'COMPLETED').length,
+    CANCELLED_PATIENT: completedJobs.filter((b) => b.status === 'CANCELLED_PATIENT').length,
+    CANCELLED_DOCTOR: completedJobs.filter((b) => b.status === 'CANCELLED_DOCTOR').length,
+  };
+
+  // Doanh thu thực nhận của nhóm đang xem (chỉ ca hoàn tất mới có tiền)
+  const historyRevenue = completedJobs
+    .filter((b) => (historyFilter === 'ALL' ? true : b.status === historyFilter))
+    .filter((b) => b.status === 'COMPLETED')
+    .reduce((sum, b) => sum + Number(b.service_fee || 0) + Number(b.travel_surcharge || 0), 0);
+
+  const filteredHistory = completedJobs.filter((b) => {
+    if (historyFilter !== 'ALL' && b.status !== historyFilter) return false;
+    const kw = historySearch.trim().toLowerCase();
+    if (!kw) return true;
+    const patientName = profiles.find((p) => p.id === b.patient_id)?.full_name || '';
+    return (
+      b.booking_code.toLowerCase().includes(kw) ||
+      b.service_name.toLowerCase().includes(kw) ||
+      patientName.toLowerCase().includes(kw) ||
+      (b.medical_diagnosis || '').toLowerCase().includes(kw)
+    );
+  });
+
+  // ===== SỔ CÁI VÍ: phân theo danh mục giao dịch =====
+  const txCounts = {
+    ALL: transactions.length,
+    DEPOSIT: transactions.filter((t) => t.type === 'DEPOSIT').length,
+    LOCK_COMMISSION: transactions.filter((t) => t.type === 'LOCK_COMMISSION').length,
+    DEDUCT_COMMISSION: transactions.filter((t) => t.type === 'DEDUCT_COMMISSION').length,
+    REFUND_LOCK: transactions.filter((t) => t.type === 'REFUND_LOCK').length,
+  };
+
+  // Tổng tiền của nhóm đang xem, để Thầy thuốc tự đối soát nhanh
+  const txSumOfCurrentGroup = transactions
+    .filter((t) => (txFilter === 'ALL' ? true : t.type === txFilter))
+    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
+  const filteredTransactions = transactions.filter((t) => {
+    if (txFilter !== 'ALL' && t.type !== txFilter) return false;
+    const kw = txSearch.trim().toLowerCase();
+    if (!kw) return true;
+    return (t.description || '').toLowerCase().includes(kw);
+  });
+
   const handleAccept = async (b: Booking) => {
     setActionError(null);
     setActionSuccess(null);
@@ -224,10 +365,22 @@ export default function PractitionerView({
       return;
     }
 
-    const ok = await onAcceptBooking(b.id);
+    // onAcceptBooking trả về object { success, message }. Trước đây code kiểm tra
+    // `if (ok)` nên object luôn truthy: mọi lỗi nghiệp vụ (đơn đã có người nhận,
+    // chưa duyệt CCHN, ví không đủ) đều bị nuốt và vẫn báo "đã nhận ca".
+    const res = await onAcceptBooking(b.id);
+    const ok = typeof res === 'boolean' ? res : res?.success === true;
+
     if (ok) {
       setActionSuccess(`Đã nhận ca khám ${b.booking_code}! Phí nền tảng đã được tạm giữ an toàn.`);
+      return;
     }
+
+    const msg =
+      typeof res === 'object' && res?.message
+        ? res.message
+        : 'Không nhận được ca khám này. Đơn có thể đã được thầy thuốc khác nhận hoặc bệnh nhân đã hủy.';
+    setActionError(msg);
   };
 
   const handleCheckIn = async (b: Booking) => {
@@ -415,33 +568,49 @@ export default function PractitionerView({
                 const isEditingMedicalRecord = editingBookingId === b.id;
 
                 return (
-                  <div
+                  <CollapsibleRow
                     key={b.id}
-                    className="p-5 rounded-3xl bg-white border-2 border-teal-500 shadow-xl shadow-teal-500/5 space-y-4"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-mono font-bold text-slate-500">
-                            {b.booking_code}
-                          </span>
-                          <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-teal-100 text-teal-800">
-                            {b.status === 'CONFIRMED'
-                              ? 'Đã Nhận Ca'
-                              : b.status === 'ON_THE_WAY'
-                              ? 'Đang Di Chuyển'
-                              : 'Đang Khám Tại Nhà'}
-                          </span>
-                        </div>
-                        <h4 className="text-base font-bold text-slate-900 mt-1">{b.service_name}</h4>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-sm font-extrabold text-teal-800">
+                    accent="teal"
+                    isOpen={expandedJobId === b.id}
+                    onToggle={() => setExpandedJobId(expandedJobId === b.id ? null : b.id)}
+                    code={b.booking_code}
+                    badge={
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-100 text-teal-800">
+                        {b.status === 'CONFIRMED'
+                          ? 'Đã Nhận Ca'
+                          : b.status === 'ON_THE_WAY'
+                          ? 'Đang Di Chuyển'
+                          : 'Đang Khám Tại Nhà'}
+                      </span>
+                    }
+                    title={b.service_name}
+                    subtitle={
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-slate-400 shrink-0" />
+                        {formatAppointmentLabel(b.appointment_time)}
+                        <span className="text-slate-300">•</span>
+                        <span
+                          className={
+                            describeTimeUntil(b.appointment_time).tone === 'late'
+                              ? 'text-rose-600 font-bold'
+                              : describeTimeUntil(b.appointment_time).tone === 'soon'
+                              ? 'text-amber-600 font-bold'
+                              : 'text-slate-500'
+                          }
+                        >
+                          {describeTimeUntil(b.appointment_time).text}
+                        </span>
+                      </span>
+                    }
+                    right={
+                      <>
+                        <div className="text-xs font-extrabold text-teal-800">
                           {formatVND(b.service_fee + b.travel_surcharge)}
                         </div>
-                        <div className="text-[10px] text-slate-500">Tiền mặt thu tại nhà</div>
-                      </div>
-                    </div>
+                        <div className="text-[10px] text-slate-500">Thu tại nhà</div>
+                      </>
+                    }
+                  >
 
                     {/* Full Patient Contact Unlocked (After Escrow Lock) */}
                     <div className="p-3.5 bg-slate-50 rounded-2xl space-y-2 border border-slate-200 text-xs">
@@ -637,7 +806,7 @@ export default function PractitionerView({
                         </button>
                       </div>
                     </div>
-                  </div>
+                  </CollapsibleRow>
                 );
               })}
             </div>
@@ -652,6 +821,27 @@ export default function PractitionerView({
               </h3>
               <span className="text-[11px] text-slate-500 font-medium">Mô hình chiết khấu Grab</span>
             </div>
+
+            {/* Đơn tự do vừa bị Thầy thuốc khác nhận trước */}
+            {takenNotice.length > 0 && (
+              <div className="p-3 rounded-2xl bg-slate-100 border border-slate-300 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
+                <div className="flex-1 text-[11px] text-slate-700 leading-relaxed">
+                  <strong>
+                    {takenNotice.length} đơn vừa được Thầy thuốc khác nhận trước
+                  </strong>{' '}
+                  ({takenNotice.join(', ')}). Đơn tự do được phát cho tất cả Thầy thuốc đã
+                  duyệt CCHN, ai bấm nhận trước thì đơn thuộc về người đó.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTakenNotice([])}
+                  className="text-slate-400 hover:text-slate-700 font-bold text-xs shrink-0"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
 
             {pendingBookings.length === 0 ? (
               <div className="p-8 text-center bg-white rounded-3xl border border-slate-200">
@@ -690,6 +880,63 @@ export default function PractitionerView({
                       </div>
                     </div>
 
+                    {/* NGÀY GIỜ HẸN KHÁM - căn cứ chính để quyết định có nhận ca hay không.
+                        Bấm Nhận Ca là bị khóa phí nền tảng nên phải thấy rõ trước khi bấm. */}
+                    {(() => {
+                      const until = describeTimeUntil(b.appointment_time);
+                      const conflict = findMyScheduleConflict(b);
+                      return (
+                        <div
+                          className={`p-3 rounded-2xl border-2 space-y-1.5 ${
+                            conflict || until.tone === 'late'
+                              ? 'bg-rose-50 border-rose-300'
+                              : until.tone === 'soon'
+                              ? 'bg-amber-50 border-amber-300'
+                              : 'bg-teal-50 border-teal-200'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <span className="text-[10px] font-extrabold uppercase tracking-wide text-slate-600">
+                              Lịch hẹn khám
+                            </span>
+                            <span
+                              className={`text-[11px] font-bold ${
+                                until.tone === 'late'
+                                  ? 'text-rose-700'
+                                  : until.tone === 'soon'
+                                  ? 'text-amber-700'
+                                  : 'text-teal-700'
+                              }`}
+                            >
+                              {until.text}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 text-sm font-black text-slate-900">
+                            <Clock className="w-4 h-4 text-slate-500 shrink-0" />
+                            {formatAppointmentLabel(b.appointment_time)}
+                          </div>
+
+                          {conflict && (
+                            <div className="flex items-start gap-1.5 text-[11px] text-rose-800 bg-white/70 rounded-xl p-2 border border-rose-200">
+                              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                              <span>
+                                <strong>Trùng lịch!</strong> Bạn đã có ca {conflict.booking_code} lúc{' '}
+                                {formatAppointmentLabel(conflict.appointment_time)}. Cân nhắc kỹ
+                                trước khi nhận thêm ca này.
+                              </span>
+                            </div>
+                          )}
+
+                          {until.tone === 'late' && !conflict && (
+                            <div className="text-[11px] text-rose-800">
+                              Đơn này đã quá giờ hẹn, nên liên hệ Bệnh nhân xác nhận lại trước khi nhận.
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
                     {/* Masked patient phone (Chống đi đêm trước khi nhận ca) */}
                     <div className="p-3 bg-slate-50 rounded-2xl text-xs space-y-1.5 border border-slate-100">
                       <div className="flex items-center justify-between text-slate-700 font-medium">
@@ -698,9 +945,16 @@ export default function PractitionerView({
                           {maskPhoneNumber(b.patient_phone)}
                         </span>
                       </div>
+                      {/* Địa chỉ chỉ hiện KHU VỰC khi chưa nhận ca. Đặc tả yêu cầu khóa
+                          cả SĐT lẫn địa chỉ để chống "đi đêm" bỏ qua nền tảng; địa chỉ
+                          đầy đủ được mở khóa ngay sau khi bấm Nhận Ca Khám. */}
                       <div className="flex items-start gap-1.5 text-slate-700">
                         <MapPin className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
-                        <span>{b.address}</span>
+                        <span>{getAreaOnly(b.address)}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">
+                        <Lock className="w-3 h-3 shrink-0" />
+                        <span>Địa chỉ chi tiết &amp; SĐT mở khóa sau khi bấm Nhận Ca Khám</span>
                       </div>
                       {b.symptom_notes && (
                         <div className="text-slate-600 italic">Triệu chứng: {b.symptom_notes}</div>
@@ -782,9 +1036,13 @@ export default function PractitionerView({
             </div>
           </div>
 
-          {/* Quick simulation buttons for testing */}
-          <div className="p-4 bg-white rounded-2xl border border-slate-200 text-xs flex items-center justify-between">
-            <span className="text-slate-600 font-medium">Thử nghiệm cộng tiền ví (Demo):</span>
+          {/* NÚT NẠP TIỀN THỬ NGHIỆM - CHỈ CHẠY Ở MÔI TRƯỜNG PHÁT TRIỂN.
+              Nút này cộng tiền thật vào Ví Tín Dụng mà không cần chuyển khoản.
+              Để lộ trên bản chạy thật thì Thầy thuốc tự bấm là có tiền nhận ca
+              miễn phí, sập toàn bộ mô hình thu phí nền tảng. */}
+          {ALLOW_DEMO_DEPOSIT && (
+          <div className="p-4 bg-white rounded-2xl border border-amber-300 text-xs flex items-center justify-between">
+            <span className="text-amber-700 font-bold">Nạp tiền thử nghiệm (chỉ bản dev):</span>
             <div className="flex gap-2">
               <button
                 type="button"
@@ -802,19 +1060,69 @@ export default function PractitionerView({
               </button>
             </div>
           </div>
+          )}
 
           {/* Transaction Ledger */}
           <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-md space-y-3">
-            <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-              <History className="w-4 h-4 text-teal-700" />
-              Sổ Cái Biến Động Ví Tín Dụng
-            </h4>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                <History className="w-4 h-4 text-teal-700" />
+                Sổ Cái Biến Động Ví ({filteredTransactions.length})
+              </h4>
+              <span className="text-xs font-bold text-teal-800">
+                Tổng nhóm đang xem: {formatVND(txSumOfCurrentGroup)}
+              </span>
+            </div>
 
-            {transactions.length === 0 ? (
-              <p className="text-xs text-slate-400 py-3 text-center">Chưa có giao dịch ví nào.</p>
+            {transactions.length > 0 && (
+              <>
+                <input
+                  type="text"
+                  value={txSearch}
+                  onChange={(e) => setTxSearch(e.target.value)}
+                  placeholder="Tìm theo mã đơn hoặc nội dung giao dịch..."
+                  className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-200 bg-slate-50 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-teal-600"
+                />
+
+                <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-slim pb-1">
+                  {(
+                    [
+                      ['ALL', 'Tất cả'],
+                      ['DEPOSIT', 'Nạp ví'],
+                      ['LOCK_COMMISSION', 'Tạm giữ'],
+                      ['DEDUCT_COMMISSION', 'Quyết toán'],
+                      ['REFUND_LOCK', 'Hoàn trả'],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => {
+                        setTxFilter(key);
+                        setTxVisibleCount(8);
+                      }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                        txFilter === key
+                          ? 'bg-teal-800 text-white shadow-xs'
+                          : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {label} ({txCounts[key]})
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {filteredTransactions.length === 0 ? (
+              <p className="text-xs text-slate-400 py-3 text-center">
+                {transactions.length === 0
+                  ? 'Chưa có giao dịch ví nào.'
+                  : 'Không có giao dịch nào khớp bộ lọc.'}
+              </p>
             ) : (
               <div className="divide-y divide-slate-100">
-                {transactions.map((tx) => (
+                {filteredTransactions.slice(0, txVisibleCount).map((tx) => (
                   <div key={tx.id} className="py-2.5 flex items-center justify-between text-xs">
                     <div>
                       <div className="font-bold text-slate-800">{tx.description}</div>
@@ -843,6 +1151,25 @@ export default function PractitionerView({
                 ))}
               </div>
             )}
+
+            {filteredTransactions.length > txVisibleCount && (
+              <button
+                type="button"
+                onClick={() => setTxVisibleCount((n) => n + 20)}
+                className="w-full py-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-xs font-bold text-slate-600"
+              >
+                Xem thêm 20 giao dịch (còn {filteredTransactions.length - txVisibleCount})
+              </button>
+            )}
+            {txVisibleCount > 8 && (
+              <button
+                type="button"
+                onClick={() => setTxVisibleCount(8)}
+                className="w-full py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-600"
+              >
+                Thu gọn sổ cái
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -850,51 +1177,173 @@ export default function PractitionerView({
       {/* TAB 3: HISTORY */}
       {activeTab === 'HISTORY' && (
         <div className="space-y-4">
-          <h3 className="text-sm font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
-            <History className="w-4 h-4 text-teal-700" />
-            Lịch Sử Ca Khám Đã Phụ Trách ({completedJobs.length})
-          </h3>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <h3 className="text-sm font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+              <History className="w-4 h-4 text-teal-700" />
+              Lịch Sử Ca Khám ({filteredHistory.length})
+            </h3>
+            {historyRevenue > 0 && (
+              <span className="text-xs font-bold text-emerald-800">
+                Doanh thu đã khám: {formatVND(historyRevenue)}
+              </span>
+            )}
+          </div>
 
-          {completedJobs.length === 0 ? (
+          {completedJobs.length > 0 && (
+            <div className="space-y-2">
+              <input
+                type="text"
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+                placeholder="Tìm theo mã đơn, dịch vụ, tên bệnh nhân hoặc chẩn đoán..."
+                className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-200 bg-white text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-teal-600 shadow-xs"
+              />
+
+              <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-slim pb-1">
+                {(
+                  [
+                    ['ALL', 'Tất cả'],
+                    ['COMPLETED', 'Hoàn tất'],
+                    ['CANCELLED_PATIENT', 'Bệnh nhân hủy'],
+                    ['CANCELLED_DOCTOR', 'Bạn báo bận'],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => {
+                      setHistoryFilter(key);
+                      setHistoryVisibleCount(8);
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                      historyFilter === key
+                        ? 'bg-teal-800 text-white shadow-xs'
+                        : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    {label} ({historyCounts[key]})
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {filteredHistory.length === 0 ? (
             <div className="p-8 text-center bg-white rounded-3xl border border-slate-200">
               <History className="w-10 h-10 text-slate-300 mx-auto mb-2" />
-              <p className="text-sm font-bold text-slate-700">Chưa có ca khám nào hoàn tất</p>
+              <p className="text-sm font-bold text-slate-700">
+                {completedJobs.length === 0
+                  ? 'Chưa có ca khám nào hoàn tất'
+                  : 'Không có ca khám nào khớp bộ lọc'}
+              </p>
             </div>
           ) : (
-            completedJobs.map((b) => (
-              <div
+            filteredHistory.slice(0, historyVisibleCount).map((b) => (
+              <CollapsibleRow
                 key={b.id}
-                className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm text-xs space-y-2"
-              >
-                <div className="flex items-center justify-between font-bold text-slate-800">
-                  <span className="font-mono">{b.booking_code}</span>
+                dense
+                accent={
+                  b.status === 'COMPLETED'
+                    ? 'emerald'
+                    : b.status === 'CANCELLED_PATIENT'
+                    ? 'amber'
+                    : 'rose'
+                }
+                isOpen={expandedHistoryId === b.id}
+                onToggle={() =>
+                  setExpandedHistoryId(expandedHistoryId === b.id ? null : b.id)
+                }
+                code={b.booking_code}
+                badge={
+                  // Trước đây cả hai loại hủy đều in chung một chữ "Đã hủy" nên các
+                  // dòng trông y hệt nhau, không biết ai là người hủy ca.
                   <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] ${
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap shrink-0 ${
                       b.status === 'COMPLETED'
                         ? 'bg-emerald-100 text-emerald-800'
+                        : b.status === 'CANCELLED_PATIENT'
+                        ? 'bg-amber-100 text-amber-800'
                         : 'bg-rose-100 text-rose-800'
                     }`}
                   >
-                    {b.status === 'COMPLETED' ? 'Hoàn tất' : 'Đã hủy'}
+                    {b.status === 'COMPLETED'
+                      ? 'Hoàn tất'
+                      : b.status === 'CANCELLED_PATIENT'
+                      ? 'BN hủy'
+                      : 'Báo bận'}
                   </span>
-                </div>
-                <div>{b.service_name}</div>
-                <div className="text-slate-500">{b.address}</div>
-                {b.medical_diagnosis && (
-                  <div className="bg-slate-50 p-2 rounded-xl text-slate-700 font-mono text-[11px]">
-                    Chẩn đoán: {b.medical_diagnosis}
+                }
+                title={b.service_name}
+                subtitle={formatDateTime(b.appointment_time)}
+                right={
+                  <span className="text-[11px] font-bold text-slate-700 whitespace-nowrap">
+                    {formatVND(b.service_fee)}
+                  </span>
+                }
+              >
+                <div className="text-xs space-y-2">
+                  <div className="text-slate-600">
+                    <span className="text-slate-500">Địa chỉ: </span>
+                    {b.address}
                   </div>
-                )}
-              </div>
+                  {b.medical_diagnosis ? (
+                    <div className="bg-white p-2.5 rounded-xl border border-slate-200 text-slate-700 text-[11px] space-y-1">
+                      <div>
+                        <strong className="text-teal-900">1. Chẩn đoán:</strong>{' '}
+                        {b.medical_diagnosis}
+                      </div>
+                      {b.treatment_notes && (
+                        <div>
+                          <strong className="text-teal-900">2. Thủ thuật &amp; Đơn thuốc:</strong>{' '}
+                          {b.treatment_notes}
+                        </div>
+                      )}
+                      {b.doctor_advice && (
+                        <div>
+                          <strong className="text-teal-900">3. Lời dặn:</strong> {b.doctor_advice}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-slate-400 italic text-[11px]">
+                      Ca này không có bệnh án (đã hủy).
+                    </div>
+                  )}
+                  {b.cancel_reason && (
+                    <div className="bg-rose-50 border border-rose-200 p-2 rounded-xl text-rose-800 text-[11px]">
+                      Lý do hủy: {b.cancel_reason}
+                    </div>
+                  )}
+                </div>
+              </CollapsibleRow>
             ))
+          )}
+
+          {filteredHistory.length > historyVisibleCount && (
+            <button
+              type="button"
+              onClick={() => setHistoryVisibleCount((n) => n + 20)}
+              className="w-full py-2 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-xs font-bold text-slate-600"
+            >
+              Xem thêm 20 ca khám (còn {filteredHistory.length - historyVisibleCount})
+            </button>
+          )}
+          {historyVisibleCount > 8 && (
+            <button
+              type="button"
+              onClick={() => setHistoryVisibleCount(8)}
+              className="w-full py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-600"
+            >
+              Thu gọn danh sách
+            </button>
           )}
         </div>
       )}
 
       {/* VIETQR DEPOSIT MODAL */}
       {showQRModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl animate-in fade-in zoom-in-95">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl animate-in fade-in zoom-in-95 my-auto max-h-[90vh] overflow-y-auto scrollbar-slim">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-extrabold text-slate-900 uppercase">
                 Nạp Ví Tín Dụng Qua VietQR
@@ -960,8 +1409,8 @@ export default function PractitionerView({
 
       {/* MODAL BÁO BẬN / HỦY CA BẢO VỆ THẦY THUỐC & GHI CHÚ LÝ DO */}
       {cancellingBooking && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 space-y-4 shadow-2xl border-2 border-rose-300 animate-in fade-in zoom-in-95">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 space-y-4 shadow-2xl border-2 border-rose-300 animate-in fade-in zoom-in-95 my-auto max-h-[90vh] overflow-y-auto scrollbar-slim">
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-2">
                 <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">

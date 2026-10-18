@@ -41,6 +41,7 @@ export interface PractitionerProfile {
   commission_rate: number;
   is_verified: boolean;
   rejection_reason?: string | null;
+  verified_at?: string | null;
   is_online: boolean;
   current_lat?: number;
   current_lng?: number;
