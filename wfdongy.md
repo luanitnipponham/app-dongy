@@ -105,12 +105,12 @@ CREATE TABLE IF NOT EXISTS public.wallets (
 );
 
 -- 6. Bảng Đặt lịch khám (Cô lập 1-1 giữa patient_id và practitioner_id)
--- QUY TẮC HỦY LỊCH TRIỆT ĐỂ (KHÔNG LƯU VẾT ĐANG CHẠY):
+-- QUY TẮC HỦY LỊCH TRIỆT ĐỂ:
 -- Khi Bệnh nhân bấm "Hủy lịch khám (Không phạt cọc)", hệ thống thực thi cập nhật ngay lập tức:
 -- 1. Trạng thái (status) chuyển vĩnh viễn sang 'CANCELLED_PATIENT' trên DB Supabase (và hoàn trả 100% phí tạm giữ cho Thầy thuốc nếu đơn đã nhận).
 -- 2. Đơn hủy được gỡ bỏ dứt điểm khỏi danh sách ca khám đang hoạt động (activeBookings), không còn chạy lệnh.
 -- 3. Khi Bệnh nhân thoát app, F5 tải lại trang, hoặc đăng nhập/vào lại hệ thống sau đó: Lệnh khám đã hủy triệt để, không bao giờ còn hiển thị ở trạng thái đang đặt/đang chạy.
--- 4. Đơn đã hủy chỉ xuất hiện ở mục "Sổ Bệnh Án & Đánh Giá" (pastBookings) với huy hiệu "Bệnh nhân đã hủy".
+-- 4. Phân hệ Bệnh nhân mục "Sổ Bệnh Án & Đánh Giá" CHỈ lưu trữ các ca khám đã hoàn tất (COMPLETED) có chẩn đoán y khoa 3 mục, TUYỆT ĐỐI KHÔNG hiển thị log các ca hủy đặt hẹn.
 CREATE TABLE IF NOT EXISTS public.bookings (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   booking_code VARCHAR(30) UNIQUE NOT NULL,
@@ -467,9 +467,9 @@ Bạn hãy copy **lần lượt từng Prompt dưới đây** dán vào khung ch
 >   1. **Tab Đặt Lịch & Kết Nối Thầy Thuốc:**
 >      - Bước 1: Hiển thị danh sách các Thầy thuốc đã được Admin duyệt Chứng chỉ hành nghề (`is_verified === true` và `is_online === true`) gồm Tên, Chuyên khoa, Số CCHN đã xác thực, Điểm sao đánh giá (TUYỆT ĐỐI KHÔNG HIỂN THỊ GIÁ TIỀN RIÊNG CỦA BÁC SĨ, giá khám được cố định đồng nhất theo bảng giá dịch vụ do nền tảng niêm yết ở Bước 2). Cho phép Bệnh nhân bấm **'Chọn đích danh Thầy thuốc này'** (gán `practitioner_id` = ID Thầy thuốc được chọn) HOẶC chọn mặc định **'Để hệ thống tự tìm Thầy thuốc gần nhất'** (`practitioner_id = null`, hệ thống tự phát đơn đến tất cả Thầy thuốc hợp lệ).
 >      - Bước 2: Chọn dịch vụ y học cổ truyền theo bảng giá niêm yết, chọn ngày & giờ hẹn khám, nhập địa chỉ nhà (có nút lấy tọa độ GPS hiện tại), nhập triệu chứng hiện tại (đã bãi bỏ phụ phí xăng xe). Bảng kê tài chính Grab minh bạch hiển thị giá dịch vụ và phí nền tảng.
->      - Bước 3: Danh sách Ca khám đang diễn ra của Bệnh nhân: Hiển thị rõ trạng thái, thông tin Thầy thuốc phụ trách, nút **'Gọi điện cho Thầy thuốc' (`tel:`)**, nút **'Nhắn Zalo' (`https://zalo.me/`)**, và nút **Hủy lịch khám (Không phạt cọc)**. Khi Bệnh nhân bấm Hủy, hệ thống xử lý hủy dứt điểm tức thì (cập nhật vĩnh viễn lên Supabase DB `status = 'CANCELLED_PATIENT'` và hoàn 100% tiền tạm giữ cho Thầy thuốc nếu có), gỡ bỏ hoàn toàn khỏi danh sách ca đang chạy. Khi thoát ra vào lại hoặc F5 tải lại trang, tuyệt đối không bị hiện lại lệnh đang đặt. Đơn đã hủy chuyển sang Tab 2.
+>      - Bước 3: Danh sách Ca khám đang diễn ra của Bệnh nhân: Hiển thị rõ trạng thái, thông tin Thầy thuốc phụ trách, nút **'Gọi điện cho Thầy thuốc' (`tel:`)**, nút **'Nhắn Zalo' (`https://zalo.me/`)**, và nút **Hủy lịch khám (Không phạt cọc)**. Khi Bệnh nhân bấm Hủy, hệ thống xử lý hủy dứt điểm tức thì (cập nhật vĩnh viễn lên Supabase DB `status = 'CANCELLED_PATIENT'` và hoàn 100% tiền tạm giữ cho Thầy thuốc nếu có), gỡ bỏ hoàn toàn khỏi danh sách ca đang chạy. Khi thoát ra vào lại hoặc F5 tải lại trang, tuyệt đối không bị hiện lại lệnh đang đặt.
 >   2. **Tab Sổ Bệnh Án Điện Tử & Đánh Giá:**
->      - Tra cứu lịch sử khám của bản thân, xem chi tiết **Bệnh án 3 mục** do Thầy thuốc ghi (1. Chẩn đoán, 2. Thủ thuật & Đơn thuốc, 3. Lời dặn & Hẹn tái khám), xem các đơn đã hủy của mình và cho phép chấm điểm 1-5 sao cho Thầy thuốc sau khi khám xong."
+>      - CHỈ hiển thị các ca khám đã hoàn tất thành công (`status === 'COMPLETED'`) kèm đầy đủ chi tiết **Bệnh án 3 mục** do Thầy thuốc ghi (1. Chẩn đoán bệnh, 2. Thủ thuật & Đơn thuốc, 3. Lời dặn dò & Hẹn tái khám) và cho phép chấm điểm 1-5 sao cho Thầy thuốc sau khi khám xong. TUYỆT ĐỐI KHÔNG hiển thị log các ca hủy đặt hẹn tại mục này."
 
 ### [PROMPT BƯỚC 4]: Xây dựng Phân hệ Thầy Thuốc (`src/components/PractitionerView.tsx`) - Mở Google Maps Miễn Phí & Ví Kiểu Grab
 > "Hãy tạo Component Giao diện Mobile cho Thầy thuốc tại `src/components/PractitionerView.tsx`:

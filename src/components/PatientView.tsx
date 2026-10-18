@@ -101,7 +101,7 @@ export default function PatientView({
     if (cancellingId) return;
     if (
       !confirm(
-        `Bạn chắc chắn muốn hủy lịch khám [${bookingCode}]? Lệnh khám sẽ bị hủy ngay lập tức và chuyển vào Sổ Bệnh Án (Không phạt cọc).`
+        `Bạn chắc chắn muốn hủy lịch khám [${bookingCode}]? Lệnh khám sẽ bị hủy ngay lập tức (Không phạt cọc).`
       )
     ) {
       return;
@@ -120,7 +120,7 @@ export default function PatientView({
       } else {
         setFormMsg({
           type: 'success',
-          text: `Đã hủy triệt để ca khám [${bookingCode}]! Lệnh khám đã được gỡ bỏ khỏi ca đang chạy và lưu trữ trong mục "Sổ Bệnh Án & Đánh Giá".`,
+          text: `Đã hủy triệt để ca khám mã [${bookingCode}] thành công! Lệnh khám đã được gỡ bỏ hoàn toàn.`,
         });
       }
     } catch (err: unknown) {
@@ -139,10 +139,9 @@ export default function PatientView({
     ['PENDING', 'CONFIRMED', 'ON_THE_WAY', 'IN_PROGRESS'].includes(b.status)
   );
 
-  // Past bookings (completed or cancelled)
-  const pastBookings = myBookings.filter((b) =>
-    ['COMPLETED', 'CANCELLED_PATIENT', 'CANCELLED_DOCTOR'].includes(b.status)
-  );
+  // Sổ bệnh án điện tử: CHỈ hiển thị ca khám ĐÃ HOÀN TẤT (COMPLETED) có bệnh án y khoa
+  // Tuyệt đối KHÔNG hiển thị log các ca hủy đặt hẹn
+  const completedBookings = myBookings.filter((b) => b.status === 'COMPLETED');
 
   // Verified & online practitioners
   const verifiedDoctors = Object.values(practitioners).filter(
@@ -772,29 +771,28 @@ export default function PatientView({
         </div>
       )}
 
-      {/* TAB 2: MEDICAL RECORDS & REVIEWS (BỆNH ÁN 3 MỤC) */}
+      {/* TAB 2: MEDICAL RECORDS & REVIEWS (BỆNH ÁN 3 MỤC - CHỈ CA ĐÃ HOÀN TẤT) */}
       {activeTab === 'RECORDS' && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
               <FileText className="w-4 h-4 text-emerald-600" />
-              Sổ Bệnh Án Điện Tử Của Bạn ({pastBookings.length})
+              Sổ Bệnh Án Điện Tử Của Bạn ({completedBookings.length})
             </h3>
             <span className="text-[11px] text-slate-500">Bảo mật chuẩn y khoa</span>
           </div>
 
-          {pastBookings.length === 0 ? (
+          {completedBookings.length === 0 ? (
             <div className="p-8 text-center bg-white rounded-3xl border border-slate-200">
               <FileText className="w-12 h-12 text-slate-300 mx-auto mb-2" />
               <p className="text-sm font-bold text-slate-700">Chưa có hồ sơ bệnh án nào</p>
               <p className="text-xs text-slate-500 mt-1">
-                Sau khi Thầy thuốc hoàn tất ca khám và ghi bệnh án 3 mục, thông tin sẽ được lưu giữ tại đây trọn đời.
+                Sau khi Thầy thuốc hoàn tất ca khám và ghi bệnh án 3 mục, hồ sơ y khoa chính thức sẽ được lưu giữ tại đây trọn đời.
               </p>
             </div>
           ) : (
-            pastBookings.map((b) => {
+            completedBookings.map((b) => {
               const doctor = getDoctorProfile(b.practitioner_id);
-              const isCompleted = b.status === 'COMPLETED';
 
               return (
                 <div
@@ -821,47 +819,44 @@ export default function PatientView({
                   )}
 
                   {/* 3-Part Medical Record Section */}
-                  {isCompleted && (
-                    <div className="p-4 bg-teal-50/60 rounded-2xl border border-teal-200/80 space-y-3">
-                      <div className="text-xs font-extrabold text-teal-900 flex items-center gap-1.5 uppercase">
-                        <HeartPulse className="w-4 h-4 text-teal-700" />
-                        Bệnh Án Điện Tử 3 Mục Chuẩn Y Khoa
+                  <div className="p-4 bg-teal-50/60 rounded-2xl border border-teal-200/80 space-y-3">
+                    <div className="text-xs font-extrabold text-teal-900 flex items-center gap-1.5 uppercase">
+                      <HeartPulse className="w-4 h-4 text-teal-700" />
+                      Bệnh Án Điện Tử 3 Mục Chuẩn Y Khoa
+                    </div>
+
+                    <div className="space-y-2 text-xs">
+                      <div className="bg-white p-2.5 rounded-xl border border-teal-100">
+                        <span className="font-bold text-teal-950 block mb-0.5">
+                          1. Chẩn đoán bệnh / Mạch tượng:
+                        </span>
+                        <p className="text-slate-700 whitespace-pre-wrap">
+                          {b.medical_diagnosis || 'Chẩn đoán chưa cập nhật'}
+                        </p>
                       </div>
 
-                      <div className="space-y-2 text-xs">
-                        <div className="bg-white p-2.5 rounded-xl border border-teal-100">
-                          <span className="font-bold text-teal-950 block mb-0.5">
-                            1. Chẩn đoán bệnh / Mạch tượng:
-                          </span>
-                          <p className="text-slate-700 whitespace-pre-wrap">
-                            {b.medical_diagnosis || 'Chẩn đoán chưa cập nhật'}
-                          </p>
-                        </div>
+                      <div className="bg-white p-2.5 rounded-xl border border-teal-100">
+                        <span className="font-bold text-teal-950 block mb-0.5">
+                          2. Thủ thuật đã thực hiện & Đơn thuốc:
+                        </span>
+                        <p className="text-slate-700 whitespace-pre-wrap">
+                          {b.treatment_notes || 'Chưa ghi chú thủ thuật'}
+                        </p>
+                      </div>
 
-                        <div className="bg-white p-2.5 rounded-xl border border-teal-100">
-                          <span className="font-bold text-teal-950 block mb-0.5">
-                            2. Thủ thuật đã thực hiện & Đơn thuốc:
-                          </span>
-                          <p className="text-slate-700 whitespace-pre-wrap">
-                            {b.treatment_notes || 'Chưa ghi chú thủ thuật'}
-                          </p>
-                        </div>
-
-                        <div className="bg-white p-2.5 rounded-xl border border-teal-100">
-                          <span className="font-bold text-teal-950 block mb-0.5">
-                            3. Lời dặn dò bác sĩ & Lịch hẹn tái khám:
-                          </span>
-                          <p className="text-slate-700 whitespace-pre-wrap">
-                            {b.doctor_advice || 'Uống đủ nước, sinh hoạt điều độ.'}
-                          </p>
-                        </div>
+                      <div className="bg-white p-2.5 rounded-xl border border-teal-100">
+                        <span className="font-bold text-teal-950 block mb-0.5">
+                          3. Lời dặn dò bác sĩ & Lịch hẹn tái khám:
+                        </span>
+                        <p className="text-slate-700 whitespace-pre-wrap">
+                          {b.doctor_advice || 'Uống đủ nước, sinh hoạt điều độ.'}
+                        </p>
                       </div>
                     </div>
-                  )}
+                  </div>
 
                   {/* Rating Section */}
-                  {isCompleted && (
-                    <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
                       {b.patient_rating ? (
                         <div className="flex items-center gap-1.5">
                           <span className="text-xs text-slate-500">Đánh giá của bạn:</span>
@@ -898,7 +893,6 @@ export default function PatientView({
                         </button>
                       )}
                     </div>
-                  )}
                 </div>
               );
             })
