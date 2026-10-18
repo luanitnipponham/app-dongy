@@ -578,10 +578,11 @@ export default function Home() {
     return true;
   };
 
-  // 6. Cancel Booking (NO PENALTY - Refund 100% locked fee - Immediate DB persistence)
+  // 6. Cancel Booking (NO PENALTY - Refund 100% locked fee - Immediate DB persistence & Reason Tracking)
   const handleCancelBooking = async (
     bookingId: string,
-    cancelledByRole: 'PATIENT' | 'PRACTITIONER' | 'ADMIN'
+    cancelledByRole: 'PATIENT' | 'PRACTITIONER' | 'ADMIN',
+    reason?: string
   ): Promise<{ success: boolean; message?: string }> => {
     const target = bookings.find((b) => b.id === bookingId);
     if (!target) return { success: false, message: 'Không tìm thấy ca khám.' };
@@ -589,6 +590,15 @@ export default function Home() {
 
     const newStatus =
       cancelledByRole === 'PATIENT' ? 'CANCELLED_PATIENT' : 'CANCELLED_DOCTOR';
+
+    const nowIso = new Date().toISOString();
+    const finalReason =
+      reason?.trim() ||
+      (cancelledByRole === 'PRACTITIONER'
+        ? 'Thầy thuốc báo bận / Nghi vấn lừa đảo, bảo vệ an toàn'
+        : cancelledByRole === 'ADMIN'
+        ? 'Admin điều phối hủy đơn'
+        : 'Bệnh nhân có việc bận đột xuất');
 
     // Refund locked commission if it was locked
     if (
@@ -617,34 +627,46 @@ export default function Home() {
           type: 'REFUND_LOCK',
           balance_after: refundedAvail,
           description: `Hoàn trả 100% phí tạm giữ do hủy đơn ${target.booking_code} (Không phạt cọc)`,
-          created_at: new Date().toISOString(),
+          created_at: nowIso,
         };
         setTransactions((prev) => [refundTx, ...prev]);
       }
     }
 
-    // Cập nhật ngay lập tức bộ nhớ React để UI biến mất khỏi ca khám đang chạy
+    // Cập nhật ngay lập tức bộ nhớ React để UI cập nhật ngày giờ và lý do hủy tức thì
     setBookings((prev) =>
       prev.map((b) =>
         b.id === bookingId
-          ? { ...b, status: newStatus, updated_at: new Date().toISOString() }
+          ? {
+              ...b,
+              status: newStatus,
+              cancelled_at: nowIso,
+              cancel_reason: finalReason,
+              updated_at: nowIso,
+            }
           : b
       )
     );
 
-    // Lưu vĩnh viễn lên Supabase Cloud (await để bảo đảm hoàn tất trước khi trang reload hoặc sync)
+    // Lưu vĩnh viễn lên Supabase Cloud
     if (isSupabaseConfigured) {
       try {
         const { error: rpcErr } = await supabase.rpc('cancel_booking_and_refund_lock', {
           p_booking_id: bookingId,
           p_cancelled_by_role: cancelledByRole,
+          p_cancel_reason: finalReason,
         });
 
         if (rpcErr) {
           console.warn('Supabase RPC cancel failed, attempting direct table update:', rpcErr);
           const { error: directErr } = await supabase
             .from('bookings')
-            .update({ status: newStatus, updated_at: new Date().toISOString() })
+            .update({
+              status: newStatus,
+              cancelled_at: nowIso,
+              cancel_reason: finalReason,
+              updated_at: nowIso,
+            })
             .eq('id', bookingId);
 
           if (directErr) {
@@ -660,7 +682,12 @@ export default function Home() {
         try {
           await supabase
             .from('bookings')
-            .update({ status: newStatus, updated_at: new Date().toISOString() })
+            .update({
+              status: newStatus,
+              cancelled_at: nowIso,
+              cancel_reason: finalReason,
+              updated_at: nowIso,
+            })
             .eq('id', bookingId);
         } catch (fallbackErr) {
           console.error('Fallback direct update failed:', fallbackErr);
@@ -1253,7 +1280,7 @@ export default function Home() {
     <main className="min-h-screen bg-gradient-to-b from-slate-50 via-teal-50/20 to-slate-100 text-slate-900 font-sans">
       {/* Top System Bar & Quick User Switch Bar */}
       <header className="sticky top-0 z-40 bg-white/90 backdrop-blur-md border-b border-slate-200/80 shadow-xs">
-        <div className="max-w-6xl mx-auto px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
+        <div className="max-w-6xl mx-auto px-4 py-2.5 flex items-center justify-between gap-2">
           {/* Logo Brand */}
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center shadow-xs">
@@ -1310,43 +1337,7 @@ export default function Home() {
                 <div className="text-[10px] text-slate-400 font-mono">{currentUser.phone}</div>
               </div>
 
-              {/* Quick Switch Dropdown */}
-              <div className="relative flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs">
-                <ArrowRightLeft className="w-3.5 h-3.5 text-slate-500 ml-1 shrink-0" />
-                <select
-                  aria-label="Chuyển nhanh tài khoản test"
-                  value={currentUser.phone}
-                  onChange={(e) => handleQuickSwitchUser(e.target.value)}
-                  className="bg-transparent font-bold text-xs text-slate-800 focus:outline-none cursor-pointer pr-1"
-                >
-                  {profiles.map((p) => {
-                    const prac = practitioners[p.id];
-                    const label =
-                      p.role === 'ADMIN'
-                        ? `Admin: ${p.full_name}`
-                        : p.role === 'PRACTITIONER'
-                        ? `${p.full_name} (${prac?.is_verified ? 'Đã duyệt' : 'Chờ duyệt'})`
-                        : `BN. ${p.full_name}`;
-                    return (
-                      <option key={p.id} value={p.phone}>
-                        {label} ({p.phone})
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setCurrentUser(null);
-                  setCurrentPractitioner(null);
-                }}
-                className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                title="Đăng xuất"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
+              
             </div>
           ) : (
             <div className="flex flex-wrap items-center gap-2">
@@ -1398,8 +1389,12 @@ export default function Home() {
             profiles={profiles}
             bookings={bookings}
             onCreateBooking={handleCreateBooking}
-            onCancelBooking={(id) => handleCancelBooking(id, 'PATIENT')}
+            onCancelBooking={(id, reason) => handleCancelBooking(id, 'PATIENT', reason)}
             onSubmitReview={handleSubmitReview}
+            onLogout={() => {
+              setCurrentUser(null);
+              setCurrentPractitioner(null);
+            }}
           />
         ) : currentUser.role === 'PRACTITIONER' ? (
           <PractitionerView
@@ -1424,13 +1419,21 @@ export default function Home() {
             onCheckInGPS={handleCheckInGPS}
             onUpdateStatus={handleUpdateStatus}
             onCompleteBooking={handleCompleteBooking}
-            onCancelBooking={(id) => handleCancelBooking(id, 'PRACTITIONER')}
+            onCancelBooking={(id, reason) => handleCancelBooking(id, 'PRACTITIONER', reason)}
             onDepositWallet={handleDepositWallet}
             onToggleOnline={handleToggleOnline}
+            onLogout={() => {
+              setCurrentUser(null);
+              setCurrentPractitioner(null);
+            }}
           />
         ) : (
           <AdminView
             currentUser={currentUser}
+            onLogout={() => {
+              setCurrentUser(null);
+              setCurrentPractitioner(null);
+            }}
             profiles={profiles}
             practitioners={practitioners}
             wallets={wallets}
@@ -1438,7 +1441,7 @@ export default function Home() {
             transactions={transactions}
             onVerifyPractitioner={handleVerifyPractitioner}
             onReassignDoctor={handleReassignDoctor}
-            onCancelBookingByAdmin={(id) => handleCancelBooking(id, 'ADMIN')}
+            onCancelBookingByAdmin={(id, reason) => handleCancelBooking(id, 'ADMIN', reason)}
             onResetPassword={handleResetPassword}
             onAdjustWallet={handleAdjustWallet}
             onCreateUser={handleCreateUser}

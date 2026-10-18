@@ -111,6 +111,8 @@ CREATE TABLE IF NOT EXISTS public.bookings (
   checkin_lat DOUBLE PRECISION,
   checkin_lng DOUBLE PRECISION,
   checkin_distance_meters NUMERIC(10, 2),
+  cancelled_at TIMESTAMPTZ,                            -- Ngày/tháng/năm và Giờ/phút hủy lịch
+  cancel_reason TEXT,                                  -- Ghi chú lý do Bác sĩ hoặc Bệnh nhân hủy lịch
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -243,7 +245,8 @@ $$;
 -- 10. HÀM RPC 3: Hủy lịch khám (KHÔNG PHẠT CỌC - Hoàn trả 100% phí tạm giữ về Ví khả dụng)
 CREATE OR REPLACE FUNCTION cancel_booking_and_refund_lock(
   p_booking_id UUID,
-  p_cancelled_by_role TEXT
+  p_cancelled_by_role TEXT,
+  p_cancel_reason TEXT DEFAULT NULL
 ) RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -252,6 +255,7 @@ DECLARE
   v_wallet public.wallets%ROWTYPE;
   v_booking public.bookings%ROWTYPE;
   v_new_status booking_status;
+  v_final_reason TEXT;
 BEGIN
   SELECT * INTO v_booking FROM public.bookings WHERE id = p_booking_id FOR UPDATE;
 
@@ -261,8 +265,10 @@ BEGIN
 
   IF p_cancelled_by_role = 'PATIENT' THEN
     v_new_status := 'CANCELLED_PATIENT';
+    v_final_reason := COALESCE(p_cancel_reason, 'Bệnh nhân có việc bận đột xuất');
   ELSE
     v_new_status := 'CANCELLED_DOCTOR';
+    v_final_reason := COALESCE(p_cancel_reason, 'Thầy thuốc báo bận / Nghi vấn lừa đảo, bảo vệ an toàn');
   END IF;
 
   -- Nếu đơn đã từng khóa phí nền tảng (CONFIRMED, ON_THE_WAY, IN_PROGRESS) -> Hoàn trả 100% cho Thầy thuốc
@@ -284,7 +290,10 @@ BEGIN
   END IF;
 
   UPDATE public.bookings
-  SET status = v_new_status, updated_at = NOW()
+  SET status = v_new_status,
+      cancelled_at = NOW(),
+      cancel_reason = v_final_reason,
+      updated_at = NOW()
   WHERE id = p_booking_id;
 
   RETURN jsonb_build_object('success', true);

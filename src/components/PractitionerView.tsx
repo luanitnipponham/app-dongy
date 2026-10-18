@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import {
+  LogOut,
   FileBadge,
   ShieldAlert,
   ShieldCheck,
@@ -61,10 +62,12 @@ interface PractitionerViewProps {
     advice: string
   ) => Promise<boolean>;
   onCancelBooking: (
-    bookingId: string
+    bookingId: string,
+    reason?: string
   ) => Promise<{ success: boolean; message?: string } | boolean | void> | void;
   onDepositWallet: (amount: number) => void;
   onToggleOnline: (isOnline: boolean) => void;
+  onLogout?: () => void;
 }
 
 export default function PractitionerView({
@@ -81,6 +84,7 @@ export default function PractitionerView({
   onCancelBooking,
   onDepositWallet,
   onToggleOnline,
+  onLogout,
 }: PractitionerViewProps) {
   const [activeTab, setActiveTab] = useState<'ACTIVE_JOBS' | 'WALLET' | 'HISTORY'>('ACTIVE_JOBS');
 
@@ -98,6 +102,14 @@ export default function PractitionerView({
 
   // GPS Check-in checking state
   const [isCheckingIn, setIsCheckingIn] = useState<string | null>(null);
+
+  // Cancellation Modal State (Ghi chú lý do hủy lịch bảo vệ Thầy thuốc)
+  const [cancellingBooking, setCancellingBooking] = useState<Booking | null>(null);
+  const [cancelReasonPreset, setCancelReasonPreset] = useState<string>(
+    'Nghi vấn Bệnh nhân có dấu hiệu lừa đảo / giả mạo'
+  );
+  const [cancelReasonNote, setCancelReasonNote] = useState<string>('');
+  const [isSubmittingCancel, setIsSubmittingCancel] = useState<boolean>(false);
 
   // 1. GATEKEEPER CHECK: Is verified by Admin?
   if (!practitioner.is_verified) {
@@ -277,23 +289,39 @@ export default function PractitionerView({
             </div>
           </div>
 
-          {/* Online Toggle Button */}
-          <button
-            type="button"
-            onClick={() => onToggleOnline(!practitioner.is_online)}
-            className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 shadow ${
-              practitioner.is_online
-                ? 'bg-emerald-400 text-emerald-950 hover:bg-emerald-300 ring-2 ring-emerald-300'
-                : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-            }`}
-          >
-            <span
-              className={`w-2 h-2 rounded-full ${
-                practitioner.is_online ? 'bg-emerald-950 animate-ping' : 'bg-slate-400'
+          {/* Right Action Stack: Online Toggle + Logout Button */}
+          <div className="flex flex-col items-end gap-2 shrink-0">
+            {/* Online Toggle Button */}
+            <button
+              type="button"
+              onClick={() => onToggleOnline(!practitioner.is_online)}
+              className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 shadow ${
+                practitioner.is_online
+                  ? 'bg-emerald-400 text-emerald-950 hover:bg-emerald-300 ring-2 ring-emerald-300'
+                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
               }`}
-            />
-            {practitioner.is_online ? 'Đang Sẵn Sàng (Online)' : 'Đang Tạm Ẩn (Offline)'}
-          </button>
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  practitioner.is_online ? 'bg-emerald-950 animate-ping' : 'bg-slate-400'
+                }`}
+              />
+              {practitioner.is_online ? 'Đang Sẵn Sàng (Online)' : 'Đang Tạm Ẩn (Offline)'}
+            </button>
+
+            {/* Nút Đăng xuất tiện lợi ngay trên thẻ bác sĩ */}
+            {onLogout && (
+              <button
+                type="button"
+                onClick={onLogout}
+                className="px-3.5 py-1.5 rounded-xl bg-white/15 hover:bg-rose-500/80 text-white text-xs font-bold transition-all flex items-center gap-1.5 border border-white/20 shadow-xs hover:border-rose-400/50"
+                title="Đăng xuất khỏi tài khoản"
+              >
+                <LogOut className="w-3.5 h-3.5 text-rose-300" />
+                <span>Đăng xuất</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Quick Wallet Summary Pill */}
@@ -580,23 +608,34 @@ export default function PractitionerView({
                       </button>
                     )}
 
-                    {/* Cancel button (Refund 100% lock fee) */}
-                    <div className="pt-1 flex justify-end">
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          if (
-                            confirm(
-                              'Bạn có việc bận đột xuất muốn hủy ca này? Hệ thống sẽ HOÀN TRẢ 100% phí tạm giữ về ví của bạn (Không phạt cọc).'
-                            )
-                          ) {
-                            await onCancelBooking(b.id);
-                          }
-                        }}
-                        className="text-[11px] text-slate-400 hover:text-rose-600 flex items-center gap-1 transition-colors"
-                      >
-                        <XCircle className="w-3 h-3" /> Báo bận / Hủy ca (Hoàn 100% tiền tạm giữ)
-                      </button>
+                    {/* NÚT BÁO BẬN / HỦY CA IN ĐẬM - CƠ CHẾ BẢO VỆ BÁC SĨ / THẦY THUỐC PHÒNG CHỐNG LỪA ĐẢO */}
+                    <div className="pt-3 border-t border-slate-200">
+                      <div className="p-3 bg-rose-50/90 rounded-2xl border-2 border-rose-300 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm">
+                        <div className="flex items-start gap-2 text-rose-900 text-xs leading-snug">
+                          <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                          <div>
+                            <span className="font-extrabold text-rose-700 uppercase tracking-tight block">
+                              Cơ chế bảo vệ Thầy thuốc (Phòng chống lừa đảo)
+                            </span>
+                            <span className="text-[11px] text-rose-800 font-medium">
+                              Nếu phát hiện bệnh nhân có dấu hiệu bất thường, lừa đảo hoặc có việc bận đột xuất, bạn có quyền <strong>Hủy ca ngay lập tức</strong>. Hoàn 100% phí ví, không phạt cọc.
+                            </span>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCancellingBooking(b);
+                            setCancelReasonPreset('Nghi vấn Bệnh nhân có dấu hiệu lừa đảo / giả mạo');
+                            setCancelReasonNote('');
+                          }}
+                          className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-black text-xs uppercase tracking-wide flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition-all shrink-0 active:scale-95"
+                        >
+                          <XCircle className="w-4 h-4 text-white shrink-0" />
+                          <span>HỦY CA / BÁO BẬN (HOÀN 100% TIỀN TẠM GIỮ)</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -916,6 +955,150 @@ export default function PractitionerView({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* MODAL BÁO BẬN / HỦY CA BẢO VỆ THẦY THUỐC & GHI CHÚ LÝ DO */}
+      {cancellingBooking && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 space-y-4 shadow-2xl border-2 border-rose-300 animate-in fade-in zoom-in-95">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+                  <ShieldAlert className="w-6 h-6" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-black text-rose-950 uppercase tracking-tight">
+                    Hủy Ca / Báo Bận An Toàn
+                  </h4>
+                  <div className="text-[11px] font-mono text-slate-500">
+                    Mã ca: <strong>{cancellingBooking.booking_code}</strong> • {cancellingBooking.service_name}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setCancellingBooking(null);
+                  setCancelReasonNote('');
+                }}
+                disabled={isSubmittingCancel}
+                className="text-slate-400 hover:text-slate-600 font-bold p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Reassurance banner */}
+            <div className="p-3 bg-rose-50 rounded-2xl border border-rose-200 text-xs space-y-1">
+              <div className="font-extrabold text-rose-900 flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Quyền lợi Thầy thuốc được bảo vệ tuyệt đối:</span>
+              </div>
+              <ul className="text-[11px] text-rose-800 space-y-0.5 list-disc pl-4 font-medium">
+                <li>
+                  Hoàn trả <strong>100% phí tạm giữ ({formatVND(cancellingBooking.commission_amount)})</strong> về ví ngay lập tức.
+                </li>
+                <li>
+                  Tuyệt đối <strong>không phạt tiền cọc</strong>, không trừ điểm uy tín khi gặp rủi ro lừa đảo hoặc sự cố bất khả kháng.
+                </li>
+              </ul>
+            </div>
+
+            {/* Step 1: Chọn nhóm lý do */}
+            <div className="space-y-1.5 text-xs">
+              <label className="block font-bold text-slate-800 text-[11px] uppercase tracking-wide">
+                1. Chọn lý do hủy ca chính:
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                {[
+                  'Nghi vấn Bệnh nhân có dấu hiệu lừa đảo / giả mạo',
+                  'Gọi điện không liên lạc được / SĐT ảo',
+                  'Địa chỉ ảo / Khu vực nguy hiểm không an toàn',
+                  'Bác sĩ có việc bận khẩn cấp / sức khỏe đột xuất',
+                  'Triệu chứng nặng vượt chuyên môn, cần cấp cứu',
+                  'Lý do khác',
+                ].map((reasonOption) => (
+                  <button
+                    key={reasonOption}
+                    type="button"
+                    onClick={() => setCancelReasonPreset(reasonOption)}
+                    className={`p-2 rounded-xl text-[11px] text-left font-semibold border transition-all ${
+                      cancelReasonPreset === reasonOption
+                        ? 'bg-rose-100/80 border-rose-400 text-rose-900 font-bold ring-1 ring-rose-400'
+                        : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    {reasonOption}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Step 2: Bác sĩ ghi chú chi tiết */}
+            <div className="space-y-1 text-xs">
+              <label className="block font-bold text-slate-800 text-[11px] uppercase tracking-wide">
+                2. Bác sĩ ghi chú chi tiết (Lưu hệ thống để Admin đối soát):
+              </label>
+              <textarea
+                rows={3}
+                value={cancelReasonNote}
+                onChange={(e) => setCancelReasonNote(e.target.value)}
+                placeholder="VD: Gọi điện khách yêu cầu chuyển tiền / Thái độ khả nghi / Đến nơi địa chỉ là bãi đất trống..."
+                className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-300 text-xs focus:ring-2 focus:ring-rose-500 font-medium text-slate-900"
+              />
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setCancellingBooking(null);
+                  setCancelReasonNote('');
+                }}
+                disabled={isSubmittingCancel}
+                className="flex-1 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 border border-slate-200"
+              >
+                Quay Lại
+              </button>
+              <button
+                type="button"
+                disabled={isSubmittingCancel}
+                onClick={async () => {
+                  setIsSubmittingCancel(true);
+                  try {
+                    const finalReason = cancelReasonNote.trim()
+                      ? `${cancelReasonPreset}: ${cancelReasonNote.trim()}`
+                      : cancelReasonPreset;
+                    await onCancelBooking(cancellingBooking.id, finalReason);
+                    setCancellingBooking(null);
+                    setCancelReasonNote('');
+                  } finally {
+                    setIsSubmittingCancel(false);
+                  }
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-black text-xs uppercase tracking-wide shadow-md flex items-center justify-center gap-1.5 transition-all"
+              >
+                <XCircle className="w-4 h-4 text-white shrink-0" />
+                <span>{isSubmittingCancel ? 'Đang Hủy...' : 'Xác Nhận Hủy Ca & Hoàn Phí'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Footer Logout Button for Mobile */}
+      {onLogout && (
+        <div className="mt-8 pt-4 pb-12 border-t border-slate-200/80 flex flex-col items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={onLogout}
+            className="w-full sm:w-auto px-6 py-2.5 rounded-2xl bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-700 text-xs font-bold transition-all flex items-center justify-center gap-2 border border-rose-200 shadow-xs active:scale-95"
+          >
+            <LogOut className="w-4 h-4 text-rose-600" />
+            <span>Đăng xuất tài khoản Thầy thuốc ({currentUser.phone})</span>
+          </button>
+          <p className="text-[11px] text-slate-400">Đông Y HomeCare • Bảo vệ quyền lợi Thầy thuốc</p>
         </div>
       )}
     </div>

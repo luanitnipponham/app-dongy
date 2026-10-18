@@ -16,7 +16,7 @@
      - Thầy thuốc nạp tiền vào **Ví Tín Dụng Liên Kết** bằng mã **VietQR QuickLink** tự động điền sẵn số tiền và SĐT.
      - Khi nhận lịch: Hệ thống tạm giữ (`LOCK_COMMISSION`) đúng phần phí chiết khấu nền tảng (VD: 15% - 20% giá dịch vụ, không tính chiết khấu trên phụ phí xăng xe).
      - Khi hoàn tất khám và lưu bệnh án 3 mục: Hệ thống khấu trừ vĩnh viễn (`DEDUCT_COMMISSION`) phí nền tảng từ khoản tạm giữ.
-     - **KHÔNG PHẠT TIỀN CỌC:** Nếu đơn bị hủy (do Bệnh nhân hủy hoặc Thầy thuốc báo bận hủy lịch), hệ thống **hoàn trả 100% số tiền đang tạm giữ (`REFUND_LOCK`)** về lại số dư khả dụng của Thầy thuốc.
+     - **KHÔNG PHẠT TIỀN CỌC & BẢO VỆ THẦY THUỐC (PHÒNG CHỐNG LỪA ĐẢO):** Nút **'Báo bận / Hủy ca'** trên màn hình Thầy thuốc được in đậm nổi bật kèm khung cảnh báo bảo vệ an toàn. Phòng trường hợp Bác sĩ, Thầy thuốc phát hiện Bệnh nhân có dấu hiệu bất thường, nghi vấn lừa đảo hoặc có việc bận đột xuất, Thầy thuốc có toàn quyền **HỦY CA NGAY LẬP TỨC** để tự bảo vệ bản thân. Hệ thống tự động **hoàn trả 100% số tiền đang tạm giữ (`REFUND_LOCK`)** về lại số dư khả dụng của Thầy thuốc ngay lập tức, tuyệt đối không phạt cọc, không trừ điểm uy tín.
   4. **Mở Ứng Dụng Google Maps Miễn Phí 100% Trên Điện Thoại:**
      - Ngay khi Thầy thuốc nhận đơn và biết địa chỉ Bệnh nhân, bấm nút **"Mở Google Maps Chỉ Đường"** sẽ kích hoạt Google Maps Universal Deep Link (`travelmode=two-wheeler`), tự động bật ứng dụng Google Maps miễn phí trên iOS/Android dẫn đường theo cả địa chỉ chữ lẫn tọa độ GPS mà không tốn bất kỳ chi phí Google Maps API nào.
   5. **Ghi Nhận GPS Mềm & Liên Lạc Nhanh (Gọi Điện / Zalo 1 Chạm):**
@@ -143,6 +143,8 @@ CREATE TABLE IF NOT EXISTS public.bookings (
   checkin_lat DOUBLE PRECISION,
   checkin_lng DOUBLE PRECISION,
   checkin_distance_meters NUMERIC(10, 2),
+  cancelled_at TIMESTAMPTZ,                            -- Ngày/tháng/năm và Giờ/phút hủy lịch
+  cancel_reason TEXT,                                  -- Ghi chú lý do Bác sĩ hoặc Bệnh nhân hủy lịch
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -481,14 +483,14 @@ Bạn hãy copy **lần lượt từng Prompt dưới đây** dán vào khung ch
 >    - **Tab 1: Ca Khám & Bệnh Án:**
 >      + Khi đơn ở trạng thái `PENDING`: Hiển thị minh bạch kiểu Grab: `Thu tiền mặt khách: ...đ` | `Phụ phí xăng xe (hưởng 100%): ...đ` | `Phí nền tảng (15%): ...đ`. SĐT bệnh nhân được che (`0901***567`) cho đến khi bấm nút **'Nhận Ca Khám'** (gọi RPC `accept_booking_with_escrow`).
 >      + Ngay sau khi bấm Nhận Ca Khám (`CONFIRMED` / `ON_THE_WAY` / `IN_PROGRESS`): Mở khóa đầy đủ SĐT bệnh nhân, hiện nút **'Gọi Điện'**, **'Nhắn Zalo'**, và nổi bật nhất là nút lớn **'Mở Google Maps Chỉ Đường Miễn Phí'** (mở tab mới với `getGoogleMapsDirectionsUrl(booking.address, booking.lat, booking.lng)` để tự bật app Google Maps trên điện thoại dẫn đường đến tận địa chỉ bệnh nhân).
->      + Có nút **'Check-in GPS đến nhà bệnh nhân'** (ghi nhận GPS mềm, không chặn cứng) và **Form Bệnh Án 3 Mục** (1. Chẩn đoán bệnh, 2. Thủ thuật & Đơn thuốc, 3. Lời dặn dò & Ngày tái khám) kèm nút **'Hoàn Tất Ca Khám'** (gọi RPC `complete_booking_and_deduct_commission`). Có nút 'Báo bận / Hủy ca' (hoàn trả 100% phí tạm giữ, không phạt cọc).
+>      + Có nút **'Check-in GPS đến nhà bệnh nhân'** (ghi nhận GPS mềm, không chặn cứng) và **Form Bệnh Án 3 Mục** (1. Chẩn đoán bệnh, 2. Thủ thuật & Đơn thuốc, 3. Lời dặn dò & Ngày tái khám) kèm nút **'Hoàn Tất Ca Khám'** (gọi RPC `complete_booking_and_deduct_commission`). Nút **'BÁO BẬN / HỦY CA' ĐƯỢC IN ĐẬM NỔI BẬT** (Cơ chế an toàn bảo vệ Bác sĩ/Thầy thuốc: Khi phát hiện Bệnh nhân có dấu hiệu lừa đảo, không an toàn hoặc có việc bận khẩn cấp -> Cho phép HỦY CA NGAY để bảo vệ bản thân, hệ thống lập tức hoàn trả 100% tiền tạm giữ về ví tín dụng, tuyệt đối không phạt cọc).
 >    - **Tab 2: Ví Tín Dụng Liên Kết & VietQR:** Hiển thị Số dư khả dụng, Số tiền đang tạm giữ, bảng kê chiết khấu từng ca và tạo mã QR nạp tiền tự động bằng `getVietQRUrl` (kèm nút mô phỏng nạp tiền thành công để test ngay).
 >    - **Tab 3: Tra Cứu Lịch Sử Khám:** Chỉ tra cứu các bệnh nhân đã kết nối với chính Thầy thuốc này."
 
 ### [PROMPT BƯỚC 5]: Xây dựng Phân hệ Admin Quản Trị Toàn Quyền (`src/components/AdminView.tsx`)
 > "Hãy tạo Component Giao diện Quản trị viên tại `src/components/AdminView.tsx` (Admin có quyền nhìn thấy 100% dữ liệu của mọi Thầy thuốc và Bệnh nhân). Bao gồm 4 tab:
 > 1. **Duyệt Chứng Chỉ Hành Nghề (eKYC Thầy Thuốc):** Hiển thị danh sách Thầy thuốc chờ duyệt (`is_verified = false`) có huy hiệu cảnh báo đỏ và danh sách đã duyệt. Cho phép Admin xem Số CCHN, Nơi cấp, xem ảnh chụp Giấy phép hành nghề, và bấm **'Phê Duyệt Hoạt Động'** (`is_verified = true`) hoặc **'Từ Chối / Tạm Khóa'**.
-> 2. **Giám Sát Tất Cả Lịch Khám & Điều Phối (Full Visibility):** Xem toàn bộ các ca khám đang diễn ra và đã hoàn tất trên toàn hệ thống, xem rõ Bệnh nhân nào đang kết nối với Thầy thuốc nào, xem nội dung Bệnh án 3 mục. Đặc biệt có tính năng **'Điều phối / Đổi Thầy thuốc'** (cho phép Admin chọn gán lại `practitioner_id` sang Thầy thuốc khác nếu cần) và nút **'Hủy đơn & Hoàn trả 100% phí tạm giữ cho Thầy thuốc'**.
+> 2. **Giám Sát Tất Cả Lịch Khám & Điều Phối (Full Visibility):** Xem toàn bộ các ca khám đang diễn ra và đã hoàn tất trên toàn hệ thống, xem rõ Bệnh nhân nào đang kết nối với Thầy thuốc nào, xem nội dung Bệnh án 3 mục. Hiển thị chi tiết **Ngày/Tháng/Năm và Giờ/Phút mà Bác sĩ hoặc Bệnh nhân hủy lịch** kèm **Ghi chú/Lý do hủy lịch** (Bác sĩ ghi chú nghi vấn lừa đảo để tự bảo vệ bản thân hoặc việc bận để Admin đối soát minh bạch). Đặc biệt có tính năng **'Điều phối / Đổi Thầy thuốc'** (cho phép Admin chọn gán lại `practitioner_id` sang Thầy thuốc khác nếu cần) và nút **'Hủy đơn & Hoàn trả 100% phí tạm giữ cho Thầy thuốc'**.
 > 3. **Quản Lý User (Thêm / Sửa / Xóa / Reset Mật Khẩu):** Quản lý toàn bộ Bệnh nhân và Thầy thuốc, điều chỉnh % chiết khấu nền tảng hợp lý (mặc định 15%), cộng tiền vào Ví Tín Dụng cho Thầy thuốc, hoặc bấm **'Đặt lại mật khẩu (Reset Password)'** giúp người dùng quên mật khẩu.
 > 4. **Đối Soát Phí Nền Tảng (Mô hình Grab):** Thống kê tổng doanh thu dịch vụ toàn sàn, tổng phí chiết khấu nền tảng Admin thu được, và số dư Ví Tín Dụng của từng Thầy thuốc."
 

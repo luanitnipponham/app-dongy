@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import {
+  LogOut,
   ShieldAlert,
   ShieldCheck,
   CheckCircle2,
@@ -31,6 +32,8 @@ import {
   Check,
   X,
   Sparkles,
+  Clock,
+  FileText,
 } from 'lucide-react';
 import {
   Profile,
@@ -52,7 +55,8 @@ interface AdminViewProps {
   onVerifyPractitioner: (userId: string, isVerified: boolean) => void;
   onReassignDoctor: (bookingId: string, newDoctorId: string) => void;
   onCancelBookingByAdmin: (
-    bookingId: string
+    bookingId: string,
+    reason?: string
   ) => Promise<{ success: boolean; message?: string } | boolean | void> | void;
   onResetPassword: (
     userId: string,
@@ -73,6 +77,7 @@ interface AdminViewProps {
     }
   ) => Promise<{ success: boolean; message?: string }>;
   onDeleteUser?: (userId: string) => Promise<{ success: boolean; message?: string }>;
+  onLogout?: () => void;
 }
 
 export default function AdminView({
@@ -91,6 +96,7 @@ export default function AdminView({
   onCreateUser,
   onUpdateUser,
   onDeleteUser,
+  onLogout,
 }: AdminViewProps) {
   const [activeTab, setActiveTab] = useState<'EKYC' | 'BOOKINGS' | 'USERS' | 'REVENUE'>('EKYC');
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
@@ -189,8 +195,21 @@ export default function AdminView({
               Giám sát 100% ca khám, phê duyệt Chứng chỉ hành nghề eKYC, quản lý tài chính ví tín dụng.
             </p>
           </div>
-          <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center border border-white/20">
-            <ShieldCheck className="w-7 h-7 text-purple-300" />
+          <div className="flex flex-col items-end gap-2 shrink-0">
+            <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center border border-white/20">
+              <ShieldCheck className="w-7 h-7 text-purple-300" />
+            </div>
+            {onLogout && (
+              <button
+                type="button"
+                onClick={onLogout}
+                className="px-3 py-1 rounded-xl bg-white/15 hover:bg-rose-500/80 text-white text-xs font-bold transition-all flex items-center gap-1.5 border border-white/20 shadow-xs"
+                title="Đăng xuất"
+              >
+                <LogOut className="w-3.5 h-3.5 text-rose-300" />
+                <span>Đăng xuất</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -502,9 +521,35 @@ export default function AdminView({
                         <span className="font-mono font-bold text-xs text-slate-500">
                           {b.booking_code}
                         </span>
-                        <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-800">
-                          {b.status}
-                        </span>
+                        {b.status === 'CANCELLED_DOCTOR' ? (
+                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-black bg-rose-100 text-rose-800 border border-rose-300 flex items-center gap-1">
+                            <ShieldAlert className="w-3.5 h-3.5 text-rose-600" /> Bác Sĩ / Thầy Thuốc Hủy Ca
+                          </span>
+                        ) : b.status === 'CANCELLED_PATIENT' ? (
+                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-black bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
+                            <XCircle className="w-3.5 h-3.5 text-amber-700" /> Bệnh Nhân Hủy Ca
+                          </span>
+                        ) : b.status === 'COMPLETED' ? (
+                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                            Đã Hoàn Tất
+                          </span>
+                        ) : b.status === 'CONFIRMED' ? (
+                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                            Đã Nhận Ca
+                          </span>
+                        ) : b.status === 'ON_THE_WAY' ? (
+                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                            Đang Di Chuyển
+                          </span>
+                        ) : b.status === 'IN_PROGRESS' ? (
+                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-teal-100 text-teal-800 border border-teal-200">
+                            Đang Khám
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-800">
+                            {b.status}
+                          </span>
+                        )}
                       </div>
                       <h4 className="text-sm font-bold text-slate-900 mt-0.5">{b.service_name}</h4>
                     </div>
@@ -556,6 +601,62 @@ export default function AdminView({
                     </div>
                   )}
 
+                  {/* THÔNG TIN CHI TIẾT HỦY LỊCH (NGÀY/THÁNG/NĂM, GIỜ/PHÚT & LÝ DO HỦY CA) */}
+                  {b.status.startsWith('CANCELLED') && (
+                    <div className="p-3.5 rounded-2xl bg-rose-50/90 border-2 border-rose-300 text-xs space-y-2.5 shadow-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-200/80 pb-2">
+                        <div className="flex items-center gap-1.5 font-black text-rose-900 text-xs sm:text-sm">
+                          <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+                          <span>
+                            {b.status === 'CANCELLED_DOCTOR'
+                              ? 'ĐƠN HỦY BỞI BÁC SĨ / THẦY THUỐC'
+                              : 'ĐƠN HỦY BỞI BỆNH NHÂN'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 font-bold text-slate-800 bg-white px-2.5 py-1 rounded-xl border border-rose-300 text-[11px] shadow-xs">
+                          <Clock className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                          <span>Thời điểm hủy:</span>
+                          <span className="font-mono text-rose-700 font-extrabold">
+                            {formatDateTime(b.cancelled_at || b.updated_at)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Ghi chú lý do hủy của Bác sĩ / Bệnh nhân */}
+                      <div className="bg-white p-3 rounded-xl border border-rose-200 space-y-1">
+                        <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase tracking-wide">
+                          <span className="flex items-center gap-1 text-slate-800">
+                            <FileText className="w-3.5 h-3.5 text-rose-600" />
+                            {b.status === 'CANCELLED_DOCTOR'
+                              ? 'Lý do & Ghi chú của Bác sĩ / Thầy thuốc:'
+                              : 'Lý do Bệnh nhân hủy lịch:'}
+                          </span>
+                          {b.status === 'CANCELLED_DOCTOR' && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                              Bảo vệ an toàn Thầy thuốc
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-slate-900 font-semibold text-xs leading-relaxed pl-1 pt-0.5 italic">
+                          "{b.cancel_reason ||
+                            (b.status === 'CANCELLED_DOCTOR'
+                              ? 'Thầy thuốc báo bận / Nghi vấn bệnh nhân có dấu hiệu bất thường, hủy ca bảo vệ bản thân.'
+                              : 'Bệnh nhân có việc bận đột xuất / thay đổi kế hoạch.')}"
+                        </p>
+                      </div>
+
+                      {/* Đối soát trạng thái ví tiền */}
+                      <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] text-emerald-900 font-semibold px-1 pt-0.5">
+                        <span className="flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          Đã hoàn trả 100% phí tạm giữ ({formatVND(b.commission_amount)}) về ví Thầy thuốc
+                        </span>
+                        <span className="text-slate-600 font-medium">✓ Không phạt cọc</span>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Admin Dispatch Actions */}
                   <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
                     <button
@@ -573,12 +674,12 @@ export default function AdminView({
                       <button
                         type="button"
                         onClick={async () => {
-                          if (
-                            confirm(
-                              'Admin hủy ca khám này? Tiền tạm giữ (nếu có) sẽ được HOÀN TRẢ 100% cho Thầy thuốc (Không phạt cọc).'
-                            )
-                          ) {
-                            await onCancelBookingByAdmin(b.id);
+                          const adminReason = prompt(
+                            `XÁC NHẬN HỦY ĐƠN [${b.booking_code}]:\n\nTiền tạm giữ (nếu có) sẽ được HOÀN TRẢ 100% cho Thầy thuốc (Không phạt cọc).\n\nVui lòng nhập lý do Admin hủy ca:`,
+                            'Admin điều phối hủy theo yêu cầu'
+                          );
+                          if (adminReason !== null) {
+                            await onCancelBookingByAdmin(b.id, adminReason.trim() || 'Admin điều phối hủy');
                             setAdminMsg({
                               type: 'success',
                               text: `Đã hủy đơn ${b.booking_code} và hoàn trả 100% phí tạm giữ cho Thầy thuốc.`,
@@ -1816,6 +1917,20 @@ export default function AdminView({
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {/* Footer Logout Button for Mobile */}
+      {onLogout && (
+        <div className="mt-8 pt-4 pb-12 border-t border-slate-200/80 flex flex-col items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={onLogout}
+            className="w-full sm:w-auto px-6 py-2.5 rounded-2xl bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-700 text-xs font-bold transition-all flex items-center justify-center gap-2 border border-rose-200 shadow-xs active:scale-95"
+          >
+            <LogOut className="w-4 h-4 text-rose-600" />
+            <span>Đăng xuất quyền Quản trị ({currentUser.phone})</span>
+          </button>
+          <p className="text-[11px] text-slate-400">Đông Y HomeCare • Quản trị hệ thống an toàn</p>
         </div>
       )}
     </div>

@@ -2,6 +2,7 @@
 
 import React, { useState, useRef } from 'react';
 import {
+  LogOut,
   Calendar,
   Clock,
   MapPin,
@@ -39,9 +40,11 @@ interface PatientViewProps {
     newBooking: Partial<Booking>
   ) => Promise<{ success: boolean; message?: string; booking?: Booking }> | void;
   onCancelBooking: (
-    bookingId: string
+    bookingId: string,
+    reason?: string
   ) => Promise<{ success: boolean; message?: string } | boolean | void> | void;
   onSubmitReview: (bookingId: string, rating: number, review: string) => void;
+  onLogout?: () => void;
 }
 
 const SERVICE_PRICES: Record<string, number> = {
@@ -61,6 +64,7 @@ export default function PatientView({
   onCreateBooking,
   onCancelBooking,
   onSubmitReview,
+  onLogout,
 }: PatientViewProps) {
   const [activeTab, setActiveTab] = useState<'BOOKING' | 'RECORDS'>('BOOKING');
 
@@ -99,11 +103,11 @@ export default function PatientView({
   // Xử lý hủy lịch khám triệt để (Không phạt cọc - Ngăn tải lại xuất hiện lệnh cũ)
   const handleCancelBookingClick = async (bookingId: string, bookingCode: string) => {
     if (cancellingId) return;
-    if (
-      !confirm(
-        `Bạn chắc chắn muốn hủy lịch khám [${bookingCode}]? Lệnh khám sẽ bị hủy ngay lập tức (Không phạt cọc).`
-      )
-    ) {
+    const reasonInput = prompt(
+      `XÁC NHẬN HỦY LỊCH KHÁM [${bookingCode}]:\n\nBạn có chắc chắn muốn hủy ca khám này không? (Không phạt cọc)\n\nVui lòng nhập lý do hủy lịch:`,
+      'Bệnh nhân có việc bận đột xuất'
+    );
+    if (reasonInput === null) {
       return;
     }
 
@@ -111,7 +115,10 @@ export default function PatientView({
     setFormMsg(null);
 
     try {
-      const res = await onCancelBooking(bookingId);
+      const res = await onCancelBooking(
+        bookingId,
+        reasonInput.trim() || 'Bệnh nhân có việc bận đột xuất'
+      );
       if (res && typeof res === 'object' && 'success' in res && !res.success) {
         setFormMsg({
           type: 'error',
@@ -286,24 +293,44 @@ export default function PatientView({
 
   return (
     <div className="w-full max-w-2xl mx-auto px-4 pb-20">
-      {/* Top Banner */}
-      <div className="bg-gradient-to-r from-emerald-700 via-teal-700 to-emerald-800 rounded-3xl p-5 sm:p-6 text-white shadow-xl shadow-emerald-900/10 mb-5 relative overflow-hidden">
-        <div className="relative z-10">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-xs uppercase tracking-wider font-bold bg-white/20 px-2.5 py-0.5 rounded-full inline-block mb-1">
-                Phân hệ Bệnh Nhân
-              </span>
-              <h2 className="text-xl sm:text-2xl font-extrabold">{currentUser.full_name}</h2>
-              <p className="text-xs text-emerald-100 font-mono mt-0.5">SĐT: {currentUser.phone}</p>
+      {/* Top Banner - Compact Mobile-First */}
+      <div className="bg-gradient-to-r from-emerald-700 via-teal-700 to-emerald-800 rounded-2xl p-3 sm:p-4 text-white shadow-md shadow-emerald-900/10 mb-3 relative overflow-hidden">
+        <div className="relative z-10 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/20 shrink-0">
+              <HeartPulse className="w-5 h-5 text-emerald-200" />
             </div>
-            <div className="w-12 h-12 rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/20">
-              <HeartPulse className="w-7 h-7 text-emerald-200" />
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] uppercase tracking-wider font-bold bg-white/20 px-1.5 py-0.5 rounded-md inline-block">
+                  Bệnh Nhân
+                </span>
+                <span className="text-[11px] text-emerald-200 truncate font-mono">
+                  {currentUser.phone}
+                </span>
+              </div>
+              <h2 className="text-base sm:text-xl font-extrabold truncate leading-tight mt-0.5">
+                {currentUser.full_name}
+              </h2>
             </div>
           </div>
-          <div className="mt-3 pt-3 border-t border-white/15 text-xs text-emerald-100 flex items-center gap-1.5">
-            <ShieldCheck className="w-4 h-4 text-emerald-300" />
-            <span>Chế độ cô lập dữ liệu 1-1: Chỉ xem và quản lý ca khám của riêng bạn.</span>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="hidden sm:inline-flex items-center gap-1 text-[11px] text-emerald-200 bg-emerald-900/40 px-2 py-1 rounded-lg border border-emerald-500/20">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-300" />
+              <span>Bảo mật 1-1</span>
+            </span>
+            {onLogout && (
+              <button
+                type="button"
+                onClick={onLogout}
+                className="px-2.5 py-1.5 rounded-xl bg-white/15 hover:bg-rose-500/80 active:bg-rose-600 text-white text-xs font-bold transition-all flex items-center gap-1 border border-white/20 shadow-xs shrink-0 active:scale-95"
+                title="Đăng xuất khỏi tài khoản"
+              >
+                <LogOut className="w-3.5 h-3.5 text-rose-300" />
+                <span className="text-xs">Đăng xuất</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -959,6 +986,20 @@ export default function PatientView({
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {/* Footer Logout Button for Mobile */}
+      {onLogout && (
+        <div className="mt-8 pt-4 pb-12 border-t border-slate-200/80 flex flex-col items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={onLogout}
+            className="w-full sm:w-auto px-6 py-2.5 rounded-2xl bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-700 text-xs font-bold transition-all flex items-center justify-center gap-2 border border-rose-200 shadow-xs active:scale-95"
+          >
+            <LogOut className="w-4 h-4 text-rose-600" />
+            <span>Đăng xuất tài khoản ({currentUser.phone})</span>
+          </button>
+          <p className="text-[11px] text-slate-400">Đông Y HomeCare • Bảo mật thông tin bệnh nhân</p>
         </div>
       )}
     </div>

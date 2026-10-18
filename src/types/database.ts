@@ -86,6 +86,8 @@ export interface Booking {
   checkin_lat?: number | null;
   checkin_lng?: number | null;
   checkin_distance_meters?: number | null;
+  cancelled_at?: string | null;
+  cancel_reason?: string | null;
   created_at: string;
   updated_at: string;
 
