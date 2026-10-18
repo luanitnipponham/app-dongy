@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS public.practitioner_profiles (
   issued_by TEXT DEFAULT 'Sở Y Tế',           -- Cơ quan cấp phép
   years_of_experience INT DEFAULT 5,
   bio TEXT,
-  base_service_fee NUMERIC(12, 2) DEFAULT 400000,
+  base_service_fee NUMERIC(12, 2) DEFAULT 400000, -- (Giá tham khảo nội bộ; Phân hệ Bệnh nhân KHÔNG hiển thị giá riêng của Bác sĩ mà đồng nhất theo Bảng giá dịch vụ sàn)
   commission_rate NUMERIC(5, 2) DEFAULT 15.00, -- Chiết khấu nền tảng hợp lý kiểu Grab (VD: 15%)
   is_verified BOOLEAN DEFAULT false,          -- BẮT BUỘC: Admin duyệt mới thành true
   rejection_reason TEXT,
@@ -124,8 +124,8 @@ CREATE TABLE IF NOT EXISTS public.bookings (
   symptom_notes TEXT,
   appointment_time TIMESTAMPTZ NOT NULL,
   
-  -- Tài chính minh bạch kiểu Grab (Loại bỏ mục phụ phí xăng xe theo yêu cầu)
-  service_fee NUMERIC(12, 2) NOT NULL,                 -- Giá khám dịch vụ (từ bảng giá niêm yết)
+  -- Tài chính minh bạch kiểu Grab (Đồng nhất theo bảng giá dịch vụ sàn - KHÔNG hiển thị giá riêng của Bác sĩ)
+  service_fee NUMERIC(12, 2) NOT NULL,                 -- Giá khám dịch vụ (đồng nhất theo Bảng giá niêm yết, Bệnh nhân không phụ thuộc vào giá riêng của từng Bác sĩ)
   travel_surcharge NUMERIC(12, 2) DEFAULT 0,           -- Phụ phí xăng xe (mặc định 0đ - đã bãi bỏ mục chọn phụ phí)
   commission_rate NUMERIC(5, 2) NOT NULL DEFAULT 15.0, -- % Phí nền tảng (Chỉ tính trên service_fee)
   commission_amount NUMERIC(12, 2) NOT NULL,           -- Số tiền phí nền tảng Admin thu
@@ -465,7 +465,7 @@ Bạn hãy copy **lần lượt từng Prompt dưới đây** dán vào khung ch
 > - **Quy tắc Cô lập 1-1 bắt buộc:** Mọi truy vấn lấy danh sách lịch khám và sổ bệnh án của Bệnh nhân chỉ được lấy các dòng có `patient_id === currentUser.id`. Bệnh nhân A tuyệt đối không nhìn thấy lịch khám hay bệnh án của Bệnh nhân B.
 > - Giao diện gồm 2 tab:
 >   1. **Tab Đặt Lịch & Kết Nối Thầy Thuốc:**
->      - Bước 1: Hiển thị danh sách các Thầy thuốc đã được Admin duyệt Chứng chỉ hành nghề (`is_verified === true` và `is_online === true`) gồm Tên, Chuyên khoa, Số CCHN đã xác thực, Giá khám, Điểm sao. Cho phép Bệnh nhân bấm **'Chọn đích danh Thầy thuốc này'** (gán `practitioner_id` = ID Thầy thuốc được chọn) HOẶC chọn mặc định **'Để hệ thống tự tìm Thầy thuốc gần nhất'** (`practitioner_id = null`, hệ thống tự phát đơn đến tất cả Thầy thuốc hợp lệ).
+>      - Bước 1: Hiển thị danh sách các Thầy thuốc đã được Admin duyệt Chứng chỉ hành nghề (`is_verified === true` và `is_online === true`) gồm Tên, Chuyên khoa, Số CCHN đã xác thực, Điểm sao đánh giá (TUYỆT ĐỐI KHÔNG HIỂN THỊ GIÁ TIỀN RIÊNG CỦA BÁC SĨ, giá khám được cố định đồng nhất theo bảng giá dịch vụ do nền tảng niêm yết ở Bước 2). Cho phép Bệnh nhân bấm **'Chọn đích danh Thầy thuốc này'** (gán `practitioner_id` = ID Thầy thuốc được chọn) HOẶC chọn mặc định **'Để hệ thống tự tìm Thầy thuốc gần nhất'** (`practitioner_id = null`, hệ thống tự phát đơn đến tất cả Thầy thuốc hợp lệ).
 >      - Bước 2: Chọn dịch vụ y học cổ truyền theo bảng giá niêm yết, chọn ngày & giờ hẹn khám, nhập địa chỉ nhà (có nút lấy tọa độ GPS hiện tại), nhập triệu chứng hiện tại (đã bãi bỏ phụ phí xăng xe). Bảng kê tài chính Grab minh bạch hiển thị giá dịch vụ và phí nền tảng.
 >      - Bước 3: Danh sách Ca khám đang diễn ra của Bệnh nhân: Hiển thị rõ trạng thái, thông tin Thầy thuốc phụ trách, nút **'Gọi điện cho Thầy thuốc' (`tel:`)**, nút **'Nhắn Zalo' (`https://zalo.me/`)**, và nút **Hủy lịch khám (Không phạt cọc)**. Khi Bệnh nhân bấm Hủy, hệ thống xử lý hủy dứt điểm tức thì (cập nhật vĩnh viễn lên Supabase DB `status = 'CANCELLED_PATIENT'` và hoàn 100% tiền tạm giữ cho Thầy thuốc nếu có), gỡ bỏ hoàn toàn khỏi danh sách ca đang chạy. Khi thoát ra vào lại hoặc F5 tải lại trang, tuyệt đối không bị hiện lại lệnh đang đặt. Đơn đã hủy chuyển sang Tab 2.
 >   2. **Tab Sổ Bệnh Án Điện Tử & Đánh Giá:**

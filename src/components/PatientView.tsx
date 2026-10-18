@@ -609,8 +609,7 @@ export default function PatientView({
                                 <Star className="w-3 h-3 fill-amber-400" />
                                 <span className="text-[10px] font-bold text-slate-700">{doc.rating_avg}</span>
                               </div>
-                              <div className="text-[10px] font-bold text-emerald-700">{formatVND(doc.base_service_fee)}</div>
-                              <div className={`w-4 h-4 rounded-full border-2 mt-1 ml-auto flex items-center justify-center ${
+                              <div className={`w-4 h-4 rounded-full border-2 mt-1.5 ml-auto flex items-center justify-center ${
                                 isSelected ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-slate-300'
                               }`}>
                                 {isSelected && <CheckCircle2 className="w-3 h-3" />}
