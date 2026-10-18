@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   LogOut,
   Calendar,
@@ -24,7 +24,8 @@ import {
   User,
   ChevronsUpDown,
 } from 'lucide-react';
-import { Profile, PractitionerProfile, Booking } from '@/types/database';
+import { Profile, PractitionerProfile, Booking, ServiceItem } from '@/types/database';
+import { INITIAL_SERVICES } from '@/lib/mock-data';
 import {
   formatVND,
   formatDateTime,
@@ -36,6 +37,7 @@ interface PatientViewProps {
   practitioners: Record<string, PractitionerProfile>;
   profiles: Profile[];
   bookings: Booking[];
+  services?: ServiceItem[];
   onCreateBooking: (
     newBooking: Partial<Booking>
   ) => Promise<{ success: boolean; message?: string; booking?: Booking }> | void;
@@ -47,7 +49,8 @@ interface PatientViewProps {
   onLogout?: () => void;
 }
 
-const SERVICE_PRICES: Record<string, number> = {
+// Bảng giá dự phòng tĩnh (nếu chưa truyền services từ Cloud/Admin)
+const FALLBACK_SERVICE_PRICES: Record<string, number> = {
   'Châm cứu & Bấm huyệt đả thông kinh lạc': 400000,
   'Điều trị đau vai gáy, thoát vị đĩa đệm tại nhà': 450000,
   'Vật lý trị liệu & Phục hồi chức năng sau tai biến': 500000,
@@ -61,6 +64,7 @@ export default function PatientView({
   practitioners,
   profiles,
   bookings,
+  services = INITIAL_SERVICES,
   onCreateBooking,
   onCancelBooking,
   onSubmitReview,
@@ -74,7 +78,28 @@ export default function PatientView({
   const [selectedPractitionerId, setSelectedPractitionerId] = useState<string | null>(null);
 
   // Bước 2: Chọn dịch vụ, nhập địa chỉ, triệu chứng
-  const [serviceName, setServiceName] = useState('Châm cứu & Bấm huyệt đả thông kinh lạc');
+  // Danh sách dịch vụ đang mở phục vụ (active) từ Admin
+  const activeServices: ServiceItem[] = (services && services.length > 0 ? services : INITIAL_SERVICES).filter(
+    (s: ServiceItem) => s.is_active !== false
+  );
+
+  const [serviceName, setServiceName] = useState<string>(() => {
+    return activeServices[0]?.name || 'Châm cứu & Bấm huyệt đả thông kinh lạc';
+  });
+
+  // Tự động chọn dịch vụ đầu tiên hợp lệ nếu dịch vụ hiện tại bị Admin xóa
+  useEffect(() => {
+    if (activeServices.length > 0 && !activeServices.some((s: ServiceItem) => s.name === serviceName)) {
+      setServiceName(activeServices[0].name);
+    }
+  }, [activeServices, serviceName]);
+
+  const selectedServiceObj = activeServices.find((s: ServiceItem) => s.name === serviceName);
+  const getServiceFee = (name: string): number => {
+    const found = activeServices.find((s: ServiceItem) => s.name === name);
+    if (found) return found.price;
+    return FALLBACK_SERVICE_PRICES[name] || 400000;
+  };
   const [address, setAddress] = useState(currentUser.default_address || '');
   const [symptomNotes, setSymptomNotes] = useState('');
   const [isLocating, setIsLocating] = useState(false);
@@ -207,7 +232,7 @@ export default function PatientView({
 
     try {
       // Giá dịch vụ luôn lấy từ bảng giá SERVICE_PRICES theo dịch vụ đã chọn
-      const serviceFee = SERVICE_PRICES[serviceName] || 400000;
+      const serviceFee = selectedServiceObj?.price || getServiceFee(serviceName);
       const commissionRate = 15.0;
       const commissionAmount = Math.round((serviceFee * commissionRate) / 100);
       const bookingCode = `KB-${Date.now().toString().slice(-6)}`;
@@ -286,7 +311,7 @@ export default function PatientView({
   };
 
   // Tính toán tài chính minh bạch kiểu Grab
-  const currentServiceFee = SERVICE_PRICES[serviceName] || 400000;
+  const currentServiceFee = selectedServiceObj?.price || getServiceFee(serviceName);
   const commissionRate = 15.0;
   const commissionAmount = Math.round((currentServiceFee * commissionRate) / 100);
   const totalPatientPay = currentServiceFee;
@@ -662,9 +687,9 @@ export default function PatientView({
                   onChange={(e) => setServiceName(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs sm:text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 >
-                  {Object.entries(SERVICE_PRICES).map(([name, price]) => (
-                    <option key={name} value={name}>
-                      {name} ({formatVND(price)})
+                  {activeServices.map((s: ServiceItem) => (
+                    <option key={s.id || s.name} value={s.name}>
+                      {s.name} ({formatVND(s.price)})
                     </option>
                   ))}
                 </select>

@@ -345,3 +345,31 @@ INSERT INTO public.bookings (booking_code, patient_id, practitioner_id, service_
 VALUES
   ('KB-261017-01', '11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222', 'Châm cứu & Bấm huyệt trị đau vai gáy tại nhà', '125 Nguyễn Thị Minh Khai, Quận 1, TP.HCM', '0901234567', 10.7769, 106.6951, 'Đau cứng cổ vai gáy lan xuống tay phải 3 ngày nay.', NOW() + INTERVAL '2 hours', 400000, 30000, 15.00, 60000, 'CONFIRMED')
 ON CONFLICT (booking_code) DO NOTHING;
+
+-- ====================================================================
+-- 6. BẢNG QUẢN LÝ DANH MỤC DỊCH VỤ Y HỌC CỔ TRUYỀN (SERVICES)
+-- ====================================================================
+CREATE TABLE IF NOT EXISTS public.services (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL UNIQUE,
+    price NUMERIC(15, 2) NOT NULL DEFAULT 400000,
+    description TEXT,
+    duration_minutes INTEGER DEFAULT 60,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE public.services ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Cho phép tất cả người dùng xem danh mục dịch vụ" ON public.services FOR SELECT USING (true);
+CREATE POLICY "Toàn quyền quản trị dịch vụ cho Admin" ON public.services FOR ALL USING (true);
+
+-- Seed danh mục dịch vụ ban đầu nếu bảng còn trống
+INSERT INTO public.services (name, price, description, duration_minutes, is_active)
+VALUES
+  ('Châm cứu & Bấm huyệt đả thông kinh lạc', 400000, 'Châm cứu vô khuẩn kết hợp xoa bóp bấm huyệt thông kinh hoạt lạc, giải tỏa ứ trệ khí huyết.', 60, true),
+  ('Điều trị đau vai gáy, thoát vị đĩa đệm tại nhà', 450000, 'Kéo giãn cột sống, nắn chỉnh khớp mềm và cứu ngải ấm huyệt khu phong tán hàn.', 60, true),
+  ('Vật lý trị liệu & Phục hồi chức năng sau tai biến', 500000, 'Tập vận động phục hồi chức năng cơ, khớp, phản xạ vận động tại giường bệnh.', 75, true),
+  ('Khám Nội tổng quát & Kê đơn thuốc thang YHCT', 500000, 'Bắt mạch, xem tướng lưỡi, chẩn đoán tạng phủ và bốc thuốc thang điều trị tận gốc.', 45, true),
+  ('Xoa bóp dưỡng sinh & Chườm ngải cứu', 350000, 'Thư giãn cơ bắp, hỗ trợ giấc ngủ sâu, lưu thông khí huyết toàn thân.', 45, true)
+ON CONFLICT (name) DO NOTHING;

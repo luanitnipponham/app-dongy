@@ -1,4 +1,4 @@
-import { Profile, PractitionerProfile, Wallet, Booking, WalletTransaction } from '@/types/database';
+import { Profile, PractitionerProfile, Wallet, Booking, WalletTransaction, ServiceItem } from '@/types/database';
 
 export const INITIAL_PROFILES: Profile[] = [
   {
@@ -202,5 +202,59 @@ export const INITIAL_TRANSACTIONS: WalletTransaction[] = [
     balance_after: 1060000,
     description: 'Nạp tiền vào Ví Tín Dụng qua VietQR VCB',
     created_at: new Date(Date.now() - 3600000).toISOString(),
+  },
+];
+
+
+export const INITIAL_SERVICES: ServiceItem[] = [
+  {
+    id: 'srv-1',
+    name: 'Châm cứu & Bấm huyệt đả thông kinh lạc',
+    price: 400000,
+    description: 'Châm cứu vô khuẩn kết hợp xoa bóp bấm huyệt thông kinh hoạt lạc, giải tỏa ứ trệ khí huyết.',
+    duration_minutes: 60,
+    is_active: true,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: 'srv-2',
+    name: 'Điều trị đau vai gáy, thoát vị đĩa đệm tại nhà',
+    price: 450000,
+    description: 'Kéo giãn cột sống, nắn chỉnh khớp mềm và cứu ngải ấm huyệt khu phong tán hàn.',
+    duration_minutes: 60,
+    is_active: true,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: 'srv-3',
+    name: 'Vật lý trị liệu & Phục hồi chức năng sau tai biến',
+    price: 500000,
+    description: 'Tập vận động phục hồi chức năng cơ, khớp, phản xạ vận động tại giường bệnh.',
+    duration_minutes: 75,
+    is_active: true,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: 'srv-4',
+    name: 'Khám Nội tổng quát & Kê đơn thuốc thang YHCT',
+    price: 500000,
+    description: 'Bắt mạch, xem tướng lưỡi, chẩn đoán tạng phủ và bốc thuốc thang điều trị tận gốc.',
+    duration_minutes: 45,
+    is_active: true,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: 'srv-5',
+    name: 'Xoa bóp dưỡng sinh & Chườm ngải cứu',
+    price: 350000,
+    description: 'Thư giãn cơ bắp, hỗ trợ giấc ngủ sâu, lưu thông khí huyết toàn thân.',
+    duration_minutes: 45,
+    is_active: true,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
   },
 ];

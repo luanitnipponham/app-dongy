@@ -106,3 +106,14 @@ export interface WalletTransaction {
   description?: string | null;
   created_at: string;
 }
+
+export interface ServiceItem {
+  id: string;
+  name: string;
+  price: number;
+  description?: string | null;
+  duration_minutes?: number;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}

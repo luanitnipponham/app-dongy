@@ -18,6 +18,7 @@ import {
   Booking,
   Wallet,
   WalletTransaction,
+  ServiceItem,
 } from '@/types/database';
 import {
   INITIAL_PROFILES,
@@ -25,6 +26,7 @@ import {
   INITIAL_WALLETS,
   INITIAL_BOOKINGS,
   INITIAL_TRANSACTIONS,
+  INITIAL_SERVICES,
 } from '@/lib/mock-data';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import AuthPortal from '@/components/AuthPortal';
@@ -41,6 +43,24 @@ export default function Home() {
   const [wallets, setWallets] = useState<Record<string, Wallet>>(INITIAL_WALLETS);
   const [bookings, setBookings] = useState<Booking[]>(INITIAL_BOOKINGS);
   const [transactions, setTransactions] = useState<WalletTransaction[]>(INITIAL_TRANSACTIONS);
+  const [services, setServices] = useState<ServiceItem[]>(INITIAL_SERVICES);
+
+  // Load cached services from localStorage on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('dongy_services');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setServices(parsed);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load services from localStorage:', e);
+      }
+    }
+  }, []);
 
   // Auth state
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
@@ -139,6 +159,19 @@ export default function Home() {
           .order('created_at', { ascending: false });
         if (txData) {
           setTransactions(txData);
+        }
+
+        // Fetch services
+        try {
+          const { data: srvData } = await supabase.from('services').select('*').order('created_at', { ascending: true });
+          if (srvData && srvData.length > 0) {
+            setServices(srvData);
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('dongy_services', JSON.stringify(srvData));
+            }
+          }
+        } catch (srvErr) {
+          console.warn('Supabase services fetch error (fallback to local):', srvErr);
         }
       }
     } catch (err: unknown) {
@@ -915,6 +948,101 @@ export default function Home() {
   };
 
   // 14b. Admin Create User
+
+  // ==========================================
+  // SERVICE MANAGEMENT HANDLERS (ADMIN)
+  // ==========================================
+  const handleCreateService = async (
+    data: Omit<ServiceItem, 'id' | 'created_at' | 'updated_at'>
+  ) => {
+    const newId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : 'srv-' + Date.now();
+    const now = new Date().toISOString();
+    const newService: ServiceItem = {
+      ...data,
+      id: newId,
+      created_at: now,
+      updated_at: now,
+    };
+
+    setServices((prev) => {
+      const updated = [...prev, newService];
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('dongy_services', JSON.stringify(updated));
+      }
+      return updated;
+    });
+
+    if (isSupabaseConfigured) {
+      try {
+        await supabase.from('services').insert({
+          id: newId,
+          name: data.name,
+          price: data.price,
+          description: data.description || null,
+          duration_minutes: data.duration_minutes || 60,
+          is_active: data.is_active,
+          created_at: now,
+          updated_at: now,
+        });
+      } catch (err) {
+        console.warn('Supabase insert service error:', err);
+      }
+    }
+
+    return { success: true, message: `Đã tạo mới dịch vụ "${data.name}" thành công!` };
+  };
+
+  const handleUpdateService = async (
+    id: string,
+    data: Partial<ServiceItem>
+  ) => {
+    const now = new Date().toISOString();
+    setServices((prev) => {
+      const updated = prev.map((s) => (s.id === id ? { ...s, ...data, updated_at: now } : s));
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('dongy_services', JSON.stringify(updated));
+      }
+      return updated;
+    });
+
+    if (isSupabaseConfigured) {
+      try {
+        await supabase
+          .from('services')
+          .update({ ...data, updated_at: now })
+          .eq('id', id);
+      } catch (err) {
+        console.warn('Supabase update service error:', err);
+      }
+    }
+
+    return { success: true, message: 'Đã cập nhật dịch vụ thành công!' };
+  };
+
+  const handleDeleteService = async (id: string) => {
+    const target = services.find((s) => s.id === id);
+    setServices((prev) => {
+      const updated = prev.filter((s) => s.id !== id);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('dongy_services', JSON.stringify(updated));
+      }
+      return updated;
+    });
+
+    if (isSupabaseConfigured) {
+      try {
+        await supabase.from('services').delete().eq('id', id);
+      } catch (err) {
+        console.warn('Supabase delete service error:', err);
+      }
+    }
+
+    return { success: true, message: `Đã xóa dịch vụ "${target?.name || ''}" thành công!` };
+  };
+
   const handleCreateUser = async (data: {
     profile: Omit<Profile, 'id' | 'created_at' | 'updated_at'>;
     practitioner?: Partial<PractitionerProfile>;
@@ -1388,6 +1516,7 @@ export default function Home() {
             practitioners={practitioners}
             profiles={profiles}
             bookings={bookings}
+            services={services}
             onCreateBooking={handleCreateBooking}
             onCancelBooking={(id, reason) => handleCancelBooking(id, 'PATIENT', reason)}
             onSubmitReview={handleSubmitReview}
@@ -1439,6 +1568,10 @@ export default function Home() {
             wallets={wallets}
             bookings={bookings}
             transactions={transactions}
+            services={services}
+            onCreateService={handleCreateService}
+            onUpdateService={handleUpdateService}
+            onDeleteService={handleDeleteService}
             onVerifyPractitioner={handleVerifyPractitioner}
             onReassignDoctor={handleReassignDoctor}
             onCancelBookingByAdmin={(id, reason) => handleCancelBooking(id, 'ADMIN', reason)}

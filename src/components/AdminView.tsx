@@ -42,6 +42,7 @@ import {
   Wallet,
   WalletTransaction,
   UserRole,
+  ServiceItem,
 } from '@/types/database';
 import { formatVND, formatDateTime } from '@/lib/utils-medical';
 
@@ -52,6 +53,17 @@ interface AdminViewProps {
   wallets: Record<string, Wallet>;
   bookings: Booking[];
   transactions: WalletTransaction[];
+  services: ServiceItem[];
+  onCreateService: (
+    data: Omit<ServiceItem, 'id' | 'created_at' | 'updated_at'>
+  ) => Promise<{ success: boolean; message?: string }>;
+  onUpdateService: (
+    id: string,
+    data: Partial<ServiceItem>
+  ) => Promise<{ success: boolean; message?: string }>;
+  onDeleteService: (
+    id: string
+  ) => Promise<{ success: boolean; message?: string }>;
   onVerifyPractitioner: (userId: string, isVerified: boolean) => void;
   onReassignDoctor: (bookingId: string, newDoctorId: string) => void;
   onCancelBookingByAdmin: (
@@ -87,6 +99,10 @@ export default function AdminView({
   wallets,
   bookings,
   transactions,
+  services = [],
+  onCreateService,
+  onUpdateService,
+  onDeleteService,
   onVerifyPractitioner,
   onReassignDoctor,
   onCancelBookingByAdmin,
@@ -98,7 +114,7 @@ export default function AdminView({
   onDeleteUser,
   onLogout,
 }: AdminViewProps) {
-  const [activeTab, setActiveTab] = useState<'EKYC' | 'BOOKINGS' | 'USERS' | 'REVENUE'>('EKYC');
+  const [activeTab, setActiveTab] = useState<'EKYC' | 'BOOKINGS' | 'SERVICES' | 'USERS' | 'REVENUE'>('EKYC');
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
   const [adminMsg, setAdminMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -152,6 +168,151 @@ export default function AdminView({
   const [deletingUser, setDeletingUser] = useState<Profile | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [modalError, setModalError] = useState<string | null>(null);
+
+
+  // ==========================================
+  // SERVICE MANAGEMENT STATE & HANDLERS
+  // ==========================================
+  const [searchService, setSearchService] = useState<string>('');
+  const [filterServiceStatus, setFilterServiceStatus] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
+  const [showServiceModal, setShowServiceModal] = useState<boolean>(false);
+  const [editingService, setEditingService] = useState<ServiceItem | null>(null);
+  const [serviceForm, setServiceForm] = useState({
+    name: '',
+    price: 400000,
+    durationMinutes: 60,
+    description: '',
+    isActive: true,
+  });
+  const [deletingService, setDeletingService] = useState<ServiceItem | null>(null);
+  const [serviceSubmitting, setServiceSubmitting] = useState<boolean>(false);
+  const [serviceModalError, setServiceModalError] = useState<string | null>(null);
+
+  const handleOpenCreateService = () => {
+    setEditingService(null);
+    setServiceForm({
+      name: '',
+      price: 400000,
+      durationMinutes: 60,
+      description: '',
+      isActive: true,
+    });
+    setServiceModalError(null);
+    setShowServiceModal(true);
+  };
+
+  const handleOpenEditService = (service: ServiceItem) => {
+    setEditingService(service);
+    setServiceForm({
+      name: service.name,
+      price: service.price,
+      durationMinutes: service.duration_minutes || 60,
+      description: service.description || '',
+      isActive: service.is_active,
+    });
+    setServiceModalError(null);
+    setShowServiceModal(true);
+  };
+
+  const handleSubmitService = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!serviceForm.name.trim()) {
+      setServiceModalError('Vui lòng nhập tên dịch vụ!');
+      return;
+    }
+    const numPrice = Number(serviceForm.price);
+    if (isNaN(numPrice) || numPrice <= 0) {
+      setServiceModalError('Vui lòng nhập đơn giá hợp lệ (> 0 VNĐ)!');
+      return;
+    }
+    const numDuration = Number(serviceForm.durationMinutes);
+    if (isNaN(numDuration) || numDuration <= 0) {
+      setServiceModalError('Vui lòng nhập thời lượng điều trị hợp lệ (> 0 phút)!');
+      return;
+    }
+
+    setServiceSubmitting(true);
+    setServiceModalError(null);
+
+    try {
+      if (editingService) {
+        const res = await onUpdateService(editingService.id, {
+          name: serviceForm.name.trim(),
+          price: numPrice,
+          duration_minutes: numDuration,
+          description: serviceForm.description.trim() || null,
+          is_active: serviceForm.isActive,
+        });
+        if (res && !res.success) {
+          setServiceModalError(res.message || 'Cập nhật dịch vụ thất bại.');
+          return;
+        }
+        setAdminMsg({
+          type: 'success',
+          text: `Đã cập nhật dịch vụ "${serviceForm.name.trim()}" thành công!`,
+        });
+      } else {
+        const res = await onCreateService({
+          name: serviceForm.name.trim(),
+          price: numPrice,
+          duration_minutes: numDuration,
+          description: serviceForm.description.trim() || null,
+          is_active: serviceForm.isActive,
+        });
+        if (res && !res.success) {
+          setServiceModalError(res.message || 'Tạo mới dịch vụ thất bại.');
+          return;
+        }
+        setAdminMsg({
+          type: 'success',
+          text: `Đã tạo mới dịch vụ "${serviceForm.name.trim()}" thành công!`,
+        });
+      }
+      setShowServiceModal(false);
+    } catch (err: any) {
+      setServiceModalError(err?.message || 'Có lỗi xảy ra khi lưu dịch vụ.');
+    } finally {
+      setServiceSubmitting(false);
+    }
+  };
+
+  const handleToggleServiceStatus = async (service: ServiceItem) => {
+    try {
+      const newStatus = !service.is_active;
+      const res = await onUpdateService(service.id, { is_active: newStatus });
+      if (res && !res.success) {
+        setAdminMsg({ type: 'error', text: res.message || 'Thay đổi trạng thái thất bại.' });
+      } else {
+        setAdminMsg({
+          type: 'success',
+          text: `Đã ${newStatus ? 'kích hoạt' : 'tạm ngưng'} dịch vụ "${service.name}"!`,
+        });
+      }
+    } catch (err: any) {
+      setAdminMsg({ type: 'error', text: err?.message || 'Có lỗi xảy ra.' });
+    }
+  };
+
+  const handleConfirmDeleteService = async () => {
+    if (!deletingService) return;
+    setServiceSubmitting(true);
+    try {
+      const res = await onDeleteService(deletingService.id);
+      if (res && !res.success) {
+        setAdminMsg({ type: 'error', text: res.message || 'Xóa dịch vụ thất bại.' });
+      } else {
+        setAdminMsg({
+          type: 'success',
+          text: `Đã xóa dịch vụ "${deletingService.name}" khỏi hệ thống thành công!`,
+        });
+      }
+      setDeletingService(null);
+    } catch (err: any) {
+      setAdminMsg({ type: 'error', text: err?.message || 'Lỗi khi xóa dịch vụ.' });
+    } finally {
+      setServiceSubmitting(false);
+    }
+  };
 
   // Top-level metrics
   const unverifiedPractitioners = Object.values(practitioners).filter((p) => !p.is_verified);
@@ -272,6 +433,21 @@ export default function AdminView({
           }`}
         >
           <Calendar className="w-4 h-4" /> Giám Sát & Điều Phối
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('SERVICES')}
+          className={`flex-1 min-w-[130px] py-2.5 text-xs sm:text-sm font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+            activeTab === 'SERVICES'
+              ? 'bg-white text-purple-900 shadow-sm'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <Sparkles className="w-4 h-4 text-emerald-600" /> Quản Lý Dịch Vụ
+          <span className="px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black">
+            {services.length}
+          </span>
         </button>
 
         <button
@@ -696,6 +872,260 @@ export default function AdminView({
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* TAB: SERVICE MANAGEMENT */}
+      {activeTab === 'SERVICES' && (
+        <div className="space-y-6">
+          {/* Header Banner */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-5 rounded-3xl bg-white border border-slate-200 shadow-xs">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="p-2 rounded-xl bg-emerald-100 text-emerald-700">
+                  <Sparkles className="w-5 h-5" />
+                </span>
+                <div>
+                  <h3 className="text-base sm:text-lg font-black text-slate-900">
+                    QUẢN LÝ DANH MỤC DỊCH VỤ Y HỌC CỔ TRUYỀN ({services.length})
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Cấu hình bảng giá dịch vụ khám tại nhà, thời lượng điều trị và đồng bộ trực tiếp cho Bệnh nhân đặt lịch.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleOpenCreateService}
+              className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs shadow-md shadow-emerald-900/10 flex items-center justify-center gap-1.5 active:scale-95 transition-all shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              <span>+ Thêm Dịch Vụ Mới</span>
+            </button>
+          </div>
+
+          {/* Quick Metrics */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+              <div className="text-slate-500 text-[11px]">Tổng số dịch vụ:</div>
+              <div className="text-xl font-black text-slate-900 mt-1">{services.length}</div>
+            </div>
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+              <div className="text-slate-500 text-[11px]">Đang mở phục vụ:</div>
+              <div className="text-xl font-black text-emerald-600 mt-1">
+                {services.filter((s) => s.is_active !== false).length}
+              </div>
+            </div>
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+              <div className="text-slate-500 text-[11px]">Đang tạm ẩn:</div>
+              <div className="text-xl font-black text-slate-400 mt-1">
+                {services.filter((s) => s.is_active === false).length}
+              </div>
+            </div>
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+              <div className="text-slate-500 text-[11px]">Hoa hồng sàn thu (15%):</div>
+              <div className="text-xl font-black text-purple-700 mt-1">Tự động</div>
+            </div>
+          </div>
+
+          {/* Search & Filter Toolbar */}
+          <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
+            <div className="relative flex-1 max-w-md">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Tìm theo tên dịch vụ, mô tả..."
+                value={searchService}
+                onChange={(e) => setSearchService(e.target.value)}
+                className="w-full pl-9 pr-4 py-2.5 rounded-2xl border border-slate-200 bg-white text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-purple-600 shadow-xs"
+              />
+            </div>
+
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+              <button
+                type="button"
+                onClick={() => setFilterServiceStatus('ALL')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                  filterServiceStatus === 'ALL'
+                    ? 'bg-purple-900 text-white shadow-xs'
+                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                }`}
+              >
+                Tất cả ({services.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterServiceStatus('ACTIVE')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                  filterServiceStatus === 'ACTIVE'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                }`}
+              >
+                Đang mở ({services.filter((s) => s.is_active !== false).length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterServiceStatus('INACTIVE')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                  filterServiceStatus === 'INACTIVE'
+                    ? 'bg-slate-700 text-white shadow-xs'
+                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                }`}
+              >
+                Tạm ngưng ({services.filter((s) => s.is_active === false).length})
+              </button>
+            </div>
+          </div>
+
+          {/* Services Grid */}
+          {(() => {
+            const term = searchService.toLowerCase().trim();
+            const filtered = services.filter((s) => {
+              const matchSearch =
+                !term ||
+                s.name.toLowerCase().includes(term) ||
+                (s.description && s.description.toLowerCase().includes(term));
+              const matchStatus =
+                filterServiceStatus === 'ALL'
+                  ? true
+                  : filterServiceStatus === 'ACTIVE'
+                  ? s.is_active !== false
+                  : s.is_active === false;
+              return matchSearch && matchStatus;
+            });
+
+            if (filtered.length === 0) {
+              return (
+                <div className="p-12 text-center bg-white rounded-3xl border border-slate-200 text-slate-500">
+                  <Sparkles className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                  <p className="text-sm font-bold text-slate-700">Không tìm thấy dịch vụ nào</p>
+                  <p className="text-xs text-slate-400 mt-1">Thử thay đổi từ khóa tìm kiếm hoặc tạo dịch vụ mới.</p>
+                  <button
+                    type="button"
+                    onClick={handleOpenCreateService}
+                    className="mt-4 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow"
+                  >
+                    <Plus className="w-4 h-4" /> Tạo Dịch Vụ Mới
+                  </button>
+                </div>
+              );
+            }
+
+            return (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {filtered.map((s) => {
+                  const comm = Math.round((s.price * 15) / 100);
+                  const docReceive = s.price - comm;
+
+                  return (
+                    <div
+                      key={s.id}
+                      className={`p-5 rounded-3xl bg-white border transition-all flex flex-col justify-between gap-4 shadow-xs hover:shadow-md ${
+                        s.is_active !== false ? 'border-slate-200' : 'border-slate-300 bg-slate-50/70 opacity-75'
+                      }`}
+                    >
+                      <div>
+                        {/* Top title & status badge */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+                              <Sparkles className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <h4 className="text-sm sm:text-base font-bold text-slate-900 leading-snug">
+                                {s.name}
+                              </h4>
+                              <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5">
+                                <span className="flex items-center gap-1">
+                                  <Clock className="w-3.5 h-3.5 text-slate-400" />
+                                  {s.duration_minutes || 60} phút
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div>
+                            {s.is_active !== false ? (
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold inline-flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
+                                Đang phục vụ
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 text-[10px] font-bold inline-flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                                Tạm ẩn
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Price Breakdown */}
+                        <div className="mt-3.5 p-3 rounded-2xl bg-slate-50 border border-slate-100 grid grid-cols-2 gap-2 text-xs">
+                          <div>
+                            <span className="text-[10px] text-slate-500 block">Giá khám Bệnh nhân trả:</span>
+                            <span className="text-base font-extrabold text-emerald-700">
+                              {formatVND(s.price)}
+                            </span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[10px] text-purple-600 block">Sàn thu phí (15%):</span>
+                            <span className="text-xs font-bold text-purple-700 font-mono">
+                              +{formatVND(comm)}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Description */}
+                        {s.description && (
+                          <p className="mt-3 text-xs text-slate-600 line-clamp-2 leading-relaxed italic bg-emerald-50/30 p-2.5 rounded-xl border border-emerald-100/50">
+                            "{s.description}"
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Action buttons */}
+                      <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleServiceStatus(s)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                            s.is_active !== false
+                              ? 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                              : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-800'
+                          }`}
+                        >
+                          {s.is_active !== false ? 'Tạm ẩn' : 'Kích hoạt lại'}
+                        </button>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditService(s)}
+                            className="px-3 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs font-bold transition-all flex items-center gap-1 border border-purple-200/60"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            <span>Sửa</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setDeletingService(s)}
+                            className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold transition-all flex items-center gap-1 border border-rose-200/60"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Xóa</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -1919,6 +2349,199 @@ export default function AdminView({
           </div>
         </div>
       )}
+      {/* ====== MODAL: TẠO MỚI / CHỈNH SỬA DỊCH VỤ ====== */}
+      {showServiceModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 my-8">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">
+                    {editingService ? 'Chỉnh Sửa Dịch Vụ YHCT' : 'Thêm Dịch Vụ Mới'}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Bảng giá & thông tin hiển thị trên app Bệnh nhân
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowServiceModal(false)}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-all"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {serviceModalError && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{serviceModalError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSubmitService} className="space-y-4">
+              {/* Tên dịch vụ */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Tên Dịch Vụ Y Học Cổ Truyền <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="VD: Châm cứu & Bấm huyệt đả thông kinh lạc"
+                  value={serviceForm.name}
+                  onChange={(e) => setServiceForm({ ...serviceForm, name: e.target.value })}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-500/10"
+                />
+              </div>
+
+              {/* Đơn giá & Thời lượng */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Đơn Giá Khám Tại Nhà (VNĐ) <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min={50000}
+                    step={10000}
+                    placeholder="VD: 400000"
+                    value={serviceForm.price}
+                    onChange={(e) => setServiceForm({ ...serviceForm, price: Number(e.target.value) || 0 })}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-mono font-bold text-emerald-700 focus:outline-none focus:border-emerald-600"
+                  />
+                  <div className="text-[10px] text-slate-500 mt-1">
+                    Xem trước: <strong className="text-emerald-700">{formatVND(Number(serviceForm.price) || 0)}</strong>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Thời Lượng Dự Kiến (Phút) <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min={15}
+                    step={5}
+                    placeholder="VD: 60"
+                    value={serviceForm.durationMinutes}
+                    onChange={(e) =>
+                      setServiceForm({ ...serviceForm, durationMinutes: Number(e.target.value) || 60 })
+                    }
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-mono text-slate-800 focus:outline-none focus:border-emerald-600"
+                  />
+                  <div className="text-[10px] text-slate-500 mt-1">
+                    Phí nền tảng 15%: <strong className="text-purple-700">{formatVND(Math.round(((Number(serviceForm.price) || 0) * 15) / 100))}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Mô tả dịch vụ */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Mô Tả Quy Trình / Chỉ Định Điều Trị
+                </label>
+                <textarea
+                  rows={3}
+                  placeholder="Ghi chú các kỹ thuật áp dụng (châm cứu, xoa bóp, cứu ngải...) và trường hợp bệnh nhân thích hợp..."
+                  value={serviceForm.description}
+                  onChange={(e) => setServiceForm({ ...serviceForm, description: e.target.value })}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:border-emerald-600"
+                />
+              </div>
+
+              {/* Trạng thái hoạt động */}
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold text-slate-800">Trạng Thái Phục Vụ</div>
+                  <div className="text-[10px] text-slate-500">
+                    Cho phép Bệnh nhân nhìn thấy và đặt lịch dịch vụ này ngay
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={serviceForm.isActive}
+                  onChange={(e) => setServiceForm({ ...serviceForm, isActive: e.target.checked })}
+                  className="w-4 h-4 text-emerald-600 rounded cursor-pointer accent-emerald-600"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowServiceModal(false)}
+                  className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all"
+                >
+                  Hủy Bỏ
+                </button>
+                <button
+                  type="submit"
+                  disabled={serviceSubmitting}
+                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-900/10 flex items-center gap-1.5 transition-all"
+                >
+                  {serviceSubmitting ? (
+                    <>
+                      <Clock className="w-3.5 h-3.5 animate-spin" /> Đang lưu...
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      {editingService ? 'Lưu Thay Đổi' : 'Tạo Mới Dịch Vụ'}
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ====== MODAL: XÁC NHẬN XÓA DỊCH VỤ ====== */}
+      {deletingService && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4 text-center">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+
+            <div>
+              <h3 className="text-base font-extrabold text-slate-900">Xóa Dịch Vụ Này?</h3>
+              <p className="text-xs font-bold text-slate-800 mt-1">{deletingService.name}</p>
+              <p className="text-xs text-slate-500 mt-1">
+                Đơn giá: <strong className="text-emerald-700">{formatVND(deletingService.price)}</strong>
+              </p>
+              <p className="text-[11px] text-slate-400 mt-2">
+                Dịch vụ sẽ bị gỡ khỏi danh sách đặt lịch của Bệnh nhân. Lịch sử các ca khám cũ đã hoàn tất vẫn được bảo lưu an toàn.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingService(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                disabled={serviceSubmitting}
+                onClick={handleConfirmDeleteService}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-md shadow-rose-900/20"
+              >
+                {serviceSubmitting ? 'Đang xóa...' : 'Xác Nhận Xóa'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Footer Logout Button for Mobile */}
       {onLogout && (
         <div className="mt-8 pt-4 pb-12 border-t border-slate-200/80 flex flex-col items-center justify-center gap-2">
