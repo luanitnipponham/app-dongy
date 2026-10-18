@@ -844,13 +844,37 @@ export default function Home() {
       setCurrentPractitioner({ ...currentPractitioner, is_online: isOnline });
     }
 
-    if (isLiveConnected) {
-      supabase.from('practitioner_profiles').update({ is_online: isOnline }).eq('user_id', currentUser.id);
+    if (isSupabaseConfigured) {
+      supabase.from('practitioner_profiles').update({ is_online: isOnline, updated_at: new Date().toISOString() }).eq('user_id', currentUser.id);
     }
   };
 
-  // 12. Admin verify eKYC
-  const handleVerifyPractitioner = (userId: string, isVerified: boolean) => {
+// 12. Admin verify eKYC (Đồng bộ tức thời Supabase & React State)
+  const handleVerifyPractitioner = async (userId: string, isVerified: boolean) => {
+    const now = new Date().toISOString();
+
+    // 1. Cập nhật tức thời vào Supabase Cloud (bảo đảm lưu vĩnh viễn)
+    if (isSupabaseConfigured) {
+      try {
+        const { error } = await supabase
+          .from('practitioner_profiles')
+          .update({
+            is_verified: isVerified,
+            is_online: isVerified,
+            updated_at: now,
+          })
+          .eq('user_id', userId);
+
+        if (error) {
+          console.error('Supabase verify practitioner error:', error);
+          return { success: false, message: `Lỗi cập nhật duyệt CCHN trên Supabase: ${error.message}` };
+        }
+      } catch (err: unknown) {
+        console.error('Supabase verify exception:', err);
+      }
+    }
+
+    // 2. Cập nhật ngay lập tức bộ nhớ React state
     setPractitioners((prev) => {
       const cur = prev[userId];
       if (!cur) return prev;
@@ -859,21 +883,22 @@ export default function Home() {
         [userId]: {
           ...cur,
           is_verified: isVerified,
-          is_online: isVerified ? true : false,
+          is_online: isVerified,
+          updated_at: now,
         },
       };
     });
+
     if (currentUser?.id === userId && currentPractitioner) {
       setCurrentPractitioner({
         ...currentPractitioner,
         is_verified: isVerified,
         is_online: isVerified,
+        updated_at: now,
       });
     }
 
-    if (isLiveConnected) {
-      supabase.from('practitioner_profiles').update({ is_verified: isVerified, is_online: isVerified }).eq('user_id', userId);
-    }
+    return { success: true };
   };
 
   // 13. Admin Reassign doctor
@@ -891,10 +916,11 @@ export default function Home() {
       )
     );
 
-    if (isLiveConnected) {
+    if (isSupabaseConfigured) {
       supabase.from('bookings').update({
         practitioner_id: newDoctorId || null,
         status: newDoctorId ? 'CONFIRMED' : 'PENDING',
+        updated_at: new Date().toISOString(),
       }).eq('id', bookingId);
     }
   };

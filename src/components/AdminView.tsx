@@ -64,7 +64,7 @@ interface AdminViewProps {
   onDeleteService: (
     id: string
   ) => Promise<{ success: boolean; message?: string }>;
-  onVerifyPractitioner: (userId: string, isVerified: boolean) => void;
+  onVerifyPractitioner: (userId: string, isVerified: boolean) => Promise<{ success: boolean; message?: string } | void> | void;
   onReassignDoctor: (bookingId: string, newDoctorId: string) => void;
   onCancelBookingByAdmin: (
     bookingId: string,
@@ -535,25 +535,25 @@ export default function AdminView({
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => {
-                            onVerifyPractitioner(user.id, true);
+                          onClick={async () => {
+                            await onVerifyPractitioner(user.id, true);
                             setAdminMsg({
                               type: 'success',
                               text: `Đã phê duyệt CCHN cho Thầy thuốc ${user.full_name}! Tài khoản đã được kích hoạt nhận bệnh nhân.`,
                             });
                           }}
-                          className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-md"
+                          className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
                         >
                           <CheckCircle2 className="w-3.5 h-3.5" /> Phê Duyệt Hoạt Động
                         </button>
                         <button
                           type="button"
-                          onClick={() => {
+                          onClick={async () => {
                             if (confirm(`Từ chối hồ sơ của ${user.full_name}?`)) {
-                              onVerifyPractitioner(user.id, false);
+                              await onVerifyPractitioner(user.id, false);
                             }
                           }}
-                          className="px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs"
+                          className="px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs active:scale-95 transition-all cursor-pointer"
                         >
                           Từ Chối
                         </button>
