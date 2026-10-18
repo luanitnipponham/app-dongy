@@ -1101,56 +1101,258 @@ export default function Home() {
     }
   };
 
-// 12. Admin verify eKYC (Đồng bộ tức thời Supabase & React State)
+function isValidUUID(str?: string | null): boolean {
+  if (!str) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+}
+
+// 12. Admin verify eKYC & Phê duyệt Thầy thuốc mới (Cập nhật Role & Tạo dữ liệu Supabase nếu chưa có)
   const handleVerifyPractitioner = async (userId: string, isVerified: boolean) => {
     const now = new Date().toISOString();
+    const targetProfile = profiles.find((p) => p.id === userId);
+    const targetPractitioner = practitioners[userId];
+    const targetWallet = wallets[userId];
 
     // 1. Cập nhật tức thời vào Supabase Cloud (bảo đảm lưu vĩnh viễn)
     if (isSupabaseConfigured) {
       try {
-        const { error } = await supabase
-          .from('practitioner_profiles')
-          .update({
-            is_verified: isVerified,
-            is_online: isVerified,
-            updated_at: now,
-          })
-          .eq('user_id', userId);
+        // A. KIỂM TRA & CẬP NHẬT / TẠO PROFILE TRÊN SUPABASE (ĐỒNG BỘ ROLE 'PRACTITIONER')
+        const { data: dbProfile, error: dbProfErr } = await supabase
+          .from('profiles')
+          .select('id, role')
+          .eq('id', userId)
+          .maybeSingle();
 
-        if (error) {
-          console.error('Supabase verify practitioner error:', error);
-          return { success: false, message: `Lỗi cập nhật duyệt CCHN trên Supabase: ${error.message}` };
+        if (dbProfErr && dbProfErr.code !== 'PGRST116') {
+          console.error('Supabase check profile error:', dbProfErr);
+        }
+
+        if (!dbProfile) {
+          // Nếu Supabase chưa có dữ liệu Profile của thầy thuốc này -> TẠO THÊM PROFILE MỚI
+          const newProfPayload: Profile = {
+            id: isValidUUID(userId) ? userId : generateUUID(),
+            phone: targetProfile?.phone?.trim() || ('09' + Math.floor(10000000 + Math.random() * 90000000)),
+            password_hash: targetProfile?.password_hash || '123456',
+            full_name: targetProfile?.full_name?.trim() || 'Thầy thuốc Y học Cổ truyền',
+            avatar_url: targetProfile?.avatar_url || null,
+            default_address: targetProfile?.default_address || 'TP.HCM',
+            role: isVerified ? 'PRACTITIONER' : (targetProfile?.role || 'PRACTITIONER'),
+            is_active: targetProfile?.is_active ?? true,
+            created_at: targetProfile?.created_at || now,
+            updated_at: now,
+          };
+
+          const { error: insProfErr } = await supabase.from('profiles').insert([newProfPayload]);
+          if (insProfErr) {
+            console.error('Supabase insert profile error:', insProfErr);
+            return { success: false, message: `Lỗi tạo hồ sơ thầy thuốc trên Supabase: ${insProfErr.message}` };
+          }
+        } else {
+          // Profile đã tồn tại -> CẬP NHẬT ROLE THÀNH PRACTITIONER KHI DUYỆT
+          const { error: updProfErr } = await supabase
+            .from('profiles')
+            .update({
+              role: isVerified ? 'PRACTITIONER' : dbProfile.role,
+              updated_at: now,
+            })
+            .eq('id', userId);
+
+          if (updProfErr) {
+            console.error('Supabase update profile role error:', updProfErr);
+            return { success: false, message: `Lỗi cập nhật role thầy thuốc trên Supabase: ${updProfErr.message}` };
+          }
+        }
+
+        // B. KIỂM TRA & CẬP NHẬT / TẠO PRACTITIONER_PROFILES TRÊN SUPABASE
+        const { data: dbPrac, error: dbPracErr } = await supabase
+          .from('practitioner_profiles')
+          .select('id')
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (dbPracErr && dbPracErr.code !== 'PGRST116') {
+          console.error('Supabase check practitioner_profiles error:', dbPracErr);
+        }
+
+        if (!dbPrac) {
+          // Nếu Supabase chưa có dữ liệu chuyên môn Thầy thuốc -> TẠO THÊM PRACTITIONER_PROFILE MỚI
+          const newPracPayload: PractitionerProfile = {
+            id: targetPractitioner?.id && isValidUUID(targetPractitioner.id) ? targetPractitioner.id : generateUUID(),
+            user_id: userId,
+            specialties: targetPractitioner?.specialties && targetPractitioner.specialties.length > 0
+              ? targetPractitioner.specialties
+              : ['Châm cứu', 'Xoa bóp bấm huyệt', 'Phục hồi chức năng'],
+            license_number: targetPractitioner?.license_number || ('CCHN-' + Math.floor(10000 + Math.random() * 90000) + '/BYT'),
+            license_image_url: targetPractitioner?.license_image_url || 'https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?w=600&auto=format&fit=crop&q=80',
+            issued_by: targetPractitioner?.issued_by || 'Sở Y Tế TP.HCM',
+            years_of_experience: targetPractitioner?.years_of_experience || 5,
+            bio: targetPractitioner?.bio || 'Bác sĩ / Lương y Y học Cổ truyền chuyên nghiệp',
+            base_service_fee: targetPractitioner?.base_service_fee || 400000,
+            commission_rate: targetPractitioner?.commission_rate || 15.0,
+            is_verified: isVerified,
+            rejection_reason: null,
+            is_online: isVerified,
+            current_lat: targetPractitioner?.current_lat || 10.7769,
+            current_lng: targetPractitioner?.current_lng || 106.7009,
+            rating_avg: targetPractitioner?.rating_avg || 5.0,
+            total_reviews: targetPractitioner?.total_reviews || 0,
+            completed_jobs: targetPractitioner?.completed_jobs || 0,
+            cancelled_jobs: targetPractitioner?.cancelled_jobs || 0,
+            updated_at: now,
+          };
+
+          const { error: insPracErr } = await supabase.from('practitioner_profiles').insert([newPracPayload]);
+          if (insPracErr) {
+            console.error('Supabase insert practitioner error:', insPracErr);
+            return { success: false, message: `Lỗi tạo thông tin CCHN trên Supabase: ${insPracErr.message}` };
+          }
+        } else {
+          // Đã có -> Cập nhật is_verified & is_online
+          const { error: updPracErr } = await supabase
+            .from('practitioner_profiles')
+            .update({
+              is_verified: isVerified,
+              is_online: isVerified,
+              updated_at: now,
+            })
+            .eq('user_id', userId);
+
+          if (updPracErr) {
+            console.error('Supabase verify practitioner error:', updPracErr);
+            return { success: false, message: `Lỗi cập nhật duyệt CCHN trên Supabase: ${updPracErr.message}` };
+          }
+        }
+
+        // C. KIỂM TRA & TẠO VÍ LIÊN KẾT (WALLETS) NẾU CHƯA CÓ TRÊN SUPABASE
+        const { data: dbWallet, error: dbWalletErr } = await supabase
+          .from('wallets')
+          .select('id')
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (dbWalletErr && dbWalletErr.code !== 'PGRST116') {
+          console.error('Supabase check wallet error:', dbWalletErr);
+        }
+
+        if (!dbWallet) {
+          const newWalletPayload: Wallet = {
+            id: targetWallet?.id && isValidUUID(targetWallet.id) ? targetWallet.id : generateUUID(),
+            user_id: userId,
+            available_balance: targetWallet?.available_balance ?? 500000,
+            locked_balance: targetWallet?.locked_balance ?? 0,
+            updated_at: now,
+          };
+          const { error: insWalletErr } = await supabase.from('wallets').insert([newWalletPayload]);
+          if (insWalletErr) {
+            console.error('Supabase insert wallet error:', insWalletErr);
+          }
         }
       } catch (err: unknown) {
         console.error('Supabase verify exception:', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, message: `Lỗi kết nối cơ sở dữ liệu Supabase: ${msg}` };
       }
     }
 
-    // 2. Cập nhật ngay lập tức bộ nhớ React state
+    // 2. Cập nhật ngay lập tức bộ nhớ React state (Profiles, Practitioners, Wallets)
+    setProfiles((prev) =>
+      prev.map((p) =>
+        p.id === userId
+          ? {
+              ...p,
+              role: isVerified ? 'PRACTITIONER' : p.role,
+              updated_at: now,
+            }
+          : p
+      )
+    );
+
     setPractitioners((prev) => {
       const cur = prev[userId];
-      if (!cur) return prev;
+      if (cur) {
+        return {
+          ...prev,
+          [userId]: {
+            ...cur,
+            is_verified: isVerified,
+            is_online: isVerified,
+            updated_at: now,
+          },
+        };
+      }
+      const newPrac: PractitionerProfile = {
+        id: generateUUID(),
+        user_id: userId,
+        specialties: ['Châm cứu', 'Xoa bóp bấm huyệt'],
+        license_number: 'CCHN-' + Math.floor(10000 + Math.random() * 90000) + '/BYT',
+        license_image_url: 'https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?w=600&auto=format&fit=crop&q=80',
+        issued_by: 'Sở Y Tế TP.HCM',
+        years_of_experience: 5,
+        bio: 'Bác sĩ / Lương y Y học Cổ truyền chuyên nghiệp',
+        base_service_fee: 400000,
+        commission_rate: 15.0,
+        is_verified: isVerified,
+        is_online: isVerified,
+        rating_avg: 5.0,
+        total_reviews: 0,
+        completed_jobs: 0,
+        cancelled_jobs: 0,
+        updated_at: now,
+      };
+      return {
+        ...prev,
+        [userId]: newPrac,
+      };
+    });
+
+    setWallets((prev) => {
+      if (prev[userId]) return prev;
       return {
         ...prev,
         [userId]: {
-          ...cur,
-          is_verified: isVerified,
-          is_online: isVerified,
+          id: generateUUID(),
+          user_id: userId,
+          available_balance: 500000,
+          locked_balance: 0,
           updated_at: now,
         },
       };
     });
 
-    if (currentUser?.id === userId && currentPractitioner) {
-      setCurrentPractitioner({
-        ...currentPractitioner,
-        is_verified: isVerified,
-        is_online: isVerified,
-        updated_at: now,
-      });
+    if (currentUser?.id === userId) {
+      setCurrentUser((prev) =>
+        prev
+          ? {
+              ...prev,
+              role: isVerified ? 'PRACTITIONER' : prev.role,
+              updated_at: now,
+            }
+          : null
+      );
+      setCurrentPractitioner((prev) =>
+        prev
+          ? {
+              ...prev,
+              is_verified: isVerified,
+              is_online: isVerified,
+              updated_at: now,
+            }
+          : practitioners[userId] || null
+      );
     }
 
-    return { success: true };
+    if (isSupabaseConfigured) {
+      setTimeout(() => {
+        syncSupabaseDataQuietly();
+      }, 500);
+    }
+
+    return {
+      success: true,
+      message: isVerified
+        ? `Đã phê duyệt CCHN & cập nhật Vai trò Thầy thuốc thành công trên Supabase!`
+        : `Đã cập nhật trạng thái hồ sơ thành công!`,
+    };
   };
 
   // 13. Admin Reassign doctor
@@ -1501,23 +1703,51 @@ export default function Home() {
             profilePayload.full_name = profilePayload.full_name.trim();
           }
 
-          const { error: pErr } = await supabase
+          const { data: dbProfile } = await supabase
             .from('profiles')
-            .update(profilePayload)
-            .eq('id', userId);
+            .select('id')
+            .eq('id', userId)
+            .maybeSingle();
 
-          if (pErr) {
-            console.error('Supabase update profile error:', pErr);
-            if (pErr.code === '23505') {
+          if (!dbProfile) {
+            // Profile chưa có trên Supabase -> Tạo mới
+            const targetUser = profiles.find((p) => p.id === userId);
+            const newProfilePayload: Profile = {
+              id: isValidUUID(userId) ? userId : generateUUID(),
+              phone: profilePayload.phone || targetUser?.phone?.trim() || '0901234567',
+              password_hash: profilePayload.password_hash || targetUser?.password_hash || '123456',
+              full_name: profilePayload.full_name || targetUser?.full_name?.trim() || 'Người dùng',
+              avatar_url: profilePayload.avatar_url ?? targetUser?.avatar_url ?? null,
+              default_address: profilePayload.default_address ?? targetUser?.default_address ?? null,
+              role: profilePayload.role || targetUser?.role || 'PATIENT',
+              is_active: profilePayload.is_active ?? targetUser?.is_active ?? true,
+              created_at: targetUser?.created_at || now,
+              updated_at: now,
+            };
+            const { error: insPErr } = await supabase.from('profiles').insert([newProfilePayload]);
+            if (insPErr) {
+              console.error('Supabase insert profile error on update:', insPErr);
+              return { success: false, message: `Lỗi tạo hồ sơ trên Supabase: ${insPErr.message}` };
+            }
+          } else {
+            const { error: pErr } = await supabase
+              .from('profiles')
+              .update(profilePayload)
+              .eq('id', userId);
+
+            if (pErr) {
+              console.error('Supabase update profile error:', pErr);
+              if (pErr.code === '23505') {
+                return {
+                  success: false,
+                  message: `Số điện thoại "${data.profile.phone}" đã bị trùng với tài khoản khác trong cơ sở dữ liệu! Vui lòng chọn số khác.`,
+                };
+              }
               return {
                 success: false,
-                message: `Số điện thoại "${data.profile.phone}" đã bị trùng với tài khoản khác trong cơ sở dữ liệu! Vui lòng chọn số khác.`,
+                message: `Lỗi cập nhật Supabase: ${pErr.message}`,
               };
             }
-            return {
-              success: false,
-              message: `Lỗi cập nhật Supabase: ${pErr.message}`,
-            };
           }
         }
 
@@ -1528,7 +1758,7 @@ export default function Home() {
             .eq('user_id', userId)
             .maybeSingle();
 
-          if (checkErr) {
+          if (checkErr && checkErr.code !== 'PGRST116') {
             console.error('Check practitioner error:', checkErr);
           }
 
@@ -1544,15 +1774,43 @@ export default function Home() {
               };
             }
           } else {
+            const curP = practitioners[userId];
+            const pracPayload = {
+              ...data.practitioner,
+              id: curP?.id && isValidUUID(curP.id) ? curP.id : generateUUID(),
+              user_id: userId,
+              updated_at: now,
+            };
             const { error: prErr } = await supabase
               .from('practitioner_profiles')
-              .insert([{ ...data.practitioner, user_id: userId, updated_at: now }]);
+              .insert([pracPayload]);
             if (prErr) {
               return {
                 success: false,
                 message: `Lỗi tạo chuyên môn thầy thuốc: ${prErr.message}`,
               };
             }
+          }
+        }
+
+        // Nếu chuyển vai trò thành Thầy thuốc, bảo đảm có Ví tín dụng
+        if (data.profile.role === 'PRACTITIONER') {
+          const { data: existingWallet } = await supabase
+            .from('wallets')
+            .select('id')
+            .eq('user_id', userId)
+            .maybeSingle();
+
+          if (!existingWallet) {
+            const newWalletPayload: Wallet = {
+              id: generateUUID(),
+              user_id: userId,
+              available_balance: 500000,
+              locked_balance: 0,
+              updated_at: now,
+            };
+            await supabase.from('wallets').insert([newWalletPayload]);
+            setWallets((prev) => ({ ...prev, [userId]: newWalletPayload }));
           }
         }
       } catch (e: unknown) {
@@ -1576,16 +1834,52 @@ export default function Home() {
       })
     );
 
-    if (currentUser?.id === userId) {
-      setCurrentUser((prev) => (prev ? { ...prev, ...data.profile, updated_at: now } : null));
+    if (data.practitioner) {
+      setPractitioners((prev) => {
+        const cur = prev[userId];
+        if (cur) {
+          return {
+            ...prev,
+            [userId]: {
+              ...cur,
+              ...data.practitioner,
+              updated_at: now,
+            },
+          };
+        }
+        return {
+          ...prev,
+          [userId]: {
+            id: generateUUID(),
+            user_id: userId,
+            specialties: data.practitioner?.specialties || ['Châm cứu', 'Xoa bóp bấm huyệt'],
+            license_number: data.practitioner?.license_number || 'CCHN-2026-BYT',
+            license_image_url: data.practitioner?.license_image_url || 'https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?w=600&auto=format&fit=crop&q=80',
+            issued_by: data.practitioner?.issued_by || 'Sở Y Tế',
+            years_of_experience: data.practitioner?.years_of_experience || 5,
+            bio: 'Bác sĩ / Lương y Y học Cổ truyền chuyên nghiệp',
+            base_service_fee: 400000,
+            commission_rate: data.practitioner?.commission_rate || 15.0,
+            is_verified: data.practitioner?.is_verified ?? true,
+            is_online: data.practitioner?.is_verified ?? true,
+            rating_avg: 5.0,
+            total_reviews: 0,
+            completed_jobs: 0,
+            cancelled_jobs: 0,
+            updated_at: now,
+          },
+        };
+      });
     }
 
-    if (data.practitioner && practitioners[userId]) {
-      setPractitioners((prev) => ({
+    if (data.profile.role === 'PRACTITIONER' && !wallets[userId]) {
+      setWallets((prev) => ({
         ...prev,
         [userId]: {
-          ...prev[userId],
-          ...data.practitioner,
+          id: generateUUID(),
+          user_id: userId,
+          available_balance: 500000,
+          locked_balance: 0,
           updated_at: now,
         },
       }));
