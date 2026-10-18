@@ -33,6 +33,18 @@ import AuthPortal from '@/components/AuthPortal';
 import PatientView from '@/components/PatientView';
 import PractitionerView from '@/components/PractitionerView';
 import AdminView from '@/components/AdminView';
+import { formatVND } from '@/lib/utils-medical';
+
+function generateUUID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (ch) {
+    const r = (Math.random() * 16) | 0;
+    const v = ch === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
 
 export default function Home() {
   // Master state
@@ -76,6 +88,80 @@ export default function Home() {
   const bookingLockRef = useRef<boolean>(false);
   const lastBookingTimestampRef = useRef<number>(0);
   const [showDbModal, setShowDbModal] = useState<boolean>(false);
+
+
+  // =========================================================================
+  // TỰ ĐỘNG ĐỒNG BỘ DỮ LIỆU MỖI 5 GIÂY (5s LIVE SYNC SUPABASE)
+  // Bảo đảm Admin, Bệnh nhân và Thầy thuốc luôn thấy số liệu mới nhất tức thời
+  // =========================================================================
+  const syncSupabaseDataQuietly = async () => {
+    if (!isSupabaseConfigured) return;
+
+    try {
+      // 1. Profiles
+      const { data: profData } = await supabase.from('profiles').select('*');
+      if (profData && profData.length > 0) {
+        setProfiles(profData);
+        setCurrentUser((prevCur) => {
+          if (!prevCur) return null;
+          return profData.find((p) => p.id === prevCur.id) || prevCur;
+        });
+      }
+
+      // 2. Practitioners
+      const { data: pracData } = await supabase.from('practitioner_profiles').select('*');
+      if (pracData && pracData.length > 0) {
+        const pracMap: Record<string, PractitionerProfile> = {};
+        pracData.forEach((p) => {
+          pracMap[p.user_id] = p;
+        });
+        setPractitioners(pracMap);
+        setCurrentPractitioner((prevPrac) => {
+          if (!prevPrac) return null;
+          return pracMap[prevPrac.user_id] || prevPrac;
+        });
+      }
+
+      // 3. Wallets
+      const { data: walletData } = await supabase.from('wallets').select('*');
+      if (walletData && walletData.length > 0) {
+        const wMap: Record<string, Wallet> = {};
+        walletData.forEach((w) => {
+          wMap[w.user_id] = w;
+        });
+        setWallets(wMap);
+      }
+
+      // 4. Bookings
+      const { data: bData } = await supabase
+        .from('bookings')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (bData && bData.length > 0) {
+        setBookings(bData);
+      }
+
+      // 5. Wallet Transactions
+      const { data: txData } = await supabase
+        .from('wallet_transactions')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (txData && txData.length > 0) {
+        setTransactions(txData);
+      }
+
+      // 6. Services
+      const { data: srvData } = await supabase
+        .from('services')
+        .select('*')
+        .order('created_at', { ascending: true });
+      if (srvData && srvData.length > 0) {
+        setServices(srvData);
+      }
+    } catch (err) {
+      console.warn('Quiet 5s polling error:', err);
+    }
+  };
 
   // Check Supabase connection and tables
   const checkSupabaseConnection = async () => {
@@ -195,53 +281,37 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    // 1. Initial connection check & load
     checkSupabaseConnection();
 
-    // Supabase Realtime Listener for ALL tables (debounced to prevent duplicate fetches)
-    if (isSupabaseConfigured) {
-      const channel = supabase
-        .channel('public:realtime_sync')
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'profiles' },
-          (payload) => {
-            console.log('Realtime Profile Change detected:', payload);
-            debouncedSync();
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'practitioner_profiles' },
-          (payload) => {
-            console.log('Realtime Practitioner Change detected:', payload);
-            debouncedSync();
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'wallets' },
-          (payload) => {
-            console.log('Realtime Wallet Change detected:', payload);
-            debouncedSync();
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'bookings' },
-          (payload) => {
-            console.log('Realtime Booking Change detected:', payload);
-            debouncedSync();
-          }
-        )
-        .subscribe();
+    // 2. Chu kỳ cập nhật tự động mỗi 5 giây (5s Interval Polling) theo đúng yêu cầu
+    const pollingInterval = setInterval(() => {
+      syncSupabaseDataQuietly();
+    }, 5000);
 
-      return () => {
-        supabase.removeChannel(channel);
-        if (realtimeSyncTimerRef.current) {
-          clearTimeout(realtimeSyncTimerRef.current);
-        }
-      };
+    // 3. Supabase Realtime Listener (Websocket) hỗ trợ đồng bộ song song
+    let channel: any = null;
+    if (isSupabaseConfigured) {
+      channel = supabase
+        .channel('public:realtime_sync')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => debouncedSync())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'practitioner_profiles' }, () => debouncedSync())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'wallets' }, () => debouncedSync())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, () => debouncedSync())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'services' }, () => debouncedSync())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'wallet_transactions' }, () => debouncedSync())
+        .subscribe();
     }
+
+    return () => {
+      clearInterval(pollingInterval);
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+      if (realtimeSyncTimerRef.current) {
+        clearTimeout(realtimeSyncTimerRef.current);
+      }
+    };
   }, []);
 
   // Quick switch user helper for testing 1-1 isolation
@@ -299,7 +369,7 @@ export default function Home() {
   }) => {
     const newId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : '22222222-2222-2222-2222-' + Date.now().toString().slice(-12).padStart(12, '0');
     const newPracId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : '33333333-3333-3333-3333-' + Date.now().toString().slice(-12).padStart(12, '0');
-    const newWalletId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : '44444444-4444-4444-4444-' + Date.now().toString().slice(-12).padStart(12, '0');
+    const newWalletId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : generateUUID();
 
     const newProfile: Profile = {
       id: newId,
@@ -467,28 +537,57 @@ export default function Home() {
     }
   }, [bookings, isLiveConnected]);
 
-  // 4. Accept Booking (RPC accept_booking_with_escrow logic)
-  const handleAcceptBooking = async (bookingId: string): Promise<boolean> => {
+  // 4. Accept Booking (Kiểm tra nghiêm ngặt: Số dư ví khả dụng >= phí nền tảng mới được duyệt)
+  const handleAcceptBooking = async (
+    bookingId: string
+  ): Promise<{ success: boolean; message?: string } | boolean> => {
     const targetBooking = bookings.find((b) => b.id === bookingId);
-    if (!targetBooking || !currentUser) return false;
+    if (!targetBooking) return { success: false, message: 'Không tìm thấy ca khám!' };
+    if (!currentUser) return { success: false, message: 'Bạn chưa đăng nhập!' };
 
-    const userWallet = wallets[currentUser.id];
-    if (!userWallet || userWallet.available_balance < targetBooking.commission_amount) {
-      return false;
+    // Lấy số dư ví mới nhất trực tiếp từ Supabase Cloud để đối soát tức thời
+    let userWallet = wallets[currentUser.id];
+    if (isSupabaseConfigured) {
+      try {
+        const { data: dbWallet } = await supabase
+          .from('wallets')
+          .select('*')
+          .eq('user_id', currentUser.id)
+          .maybeSingle();
+        if (dbWallet) {
+          userWallet = dbWallet;
+          setWallets((prev) => ({ ...prev, [currentUser.id]: dbWallet }));
+        }
+      } catch (fetchErr) {
+        console.warn('Supabase fetch wallet error on accept:', fetchErr);
+      }
     }
 
-    // Escrow lock: reduce available, increase locked
-    const newAvail = userWallet.available_balance - targetBooking.commission_amount;
-    const newLock = userWallet.locked_balance + targetBooking.commission_amount;
+    const avail = Number(userWallet?.available_balance || 0);
+    const comm = Number(targetBooking.commission_amount || 0);
+
+    // BẮT BUỘC: SỐ TIỀN VÍ PHẢI LỚN HƠN HOẶC BẰNG PHÍ NỀN TẢNG MỚI ĐƯỢC DUYỆT NHẬN CA!
+    if (!userWallet || avail < comm) {
+      return {
+        success: false,
+        message: `Số dư Ví Tín Dụng (${formatVND(avail)}) không đủ để tạm giữ phí nền tảng (${formatVND(comm)}). Vui lòng nạp thêm qua VietQR!`,
+      };
+    }
+
+    const now = new Date().toISOString();
+    const newAvail = avail - comm;
+    const newLock = Number(userWallet.locked_balance || 0) + comm;
+
+    const updatedWallet: Wallet = {
+      ...userWallet,
+      available_balance: newAvail,
+      locked_balance: newLock,
+      updated_at: now,
+    };
 
     setWallets((prev) => ({
       ...prev,
-      [currentUser.id]: {
-        ...userWallet,
-        available_balance: newAvail,
-        locked_balance: newLock,
-        updated_at: new Date().toISOString(),
-      },
+      [currentUser.id]: updatedWallet,
     }));
 
     setBookings((prev) =>
@@ -498,41 +597,63 @@ export default function Home() {
               ...b,
               practitioner_id: currentUser.id,
               status: 'CONFIRMED',
-              updated_at: new Date().toISOString(),
+              updated_at: now,
             }
           : b
       )
     );
 
+    const newTxId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : generateUUID();
     const newTx: WalletTransaction = {
-      id: `tx-${Date.now()}`,
+      id: newTxId,
       wallet_id: userWallet.id,
       booking_id: bookingId,
-      amount: targetBooking.commission_amount,
+      amount: comm,
       type: 'LOCK_COMMISSION',
       balance_after: newAvail,
       description: `Tạm giữ phí nền tảng (${targetBooking.commission_rate}%) cho đơn ${targetBooking.booking_code}`,
-      created_at: new Date().toISOString(),
+      created_at: now,
     };
 
     setTransactions((prev) => [newTx, ...prev]);
 
-    // Live RPC to Supabase
-    if (isLiveConnected) {
+    // Lưu trực tiếp vào Supabase Cloud
+    if (isSupabaseConfigured) {
       try {
-        await supabase.rpc('accept_booking_with_escrow', {
-          p_booking_id: bookingId,
-          p_practitioner_id: currentUser.id,
-        });
+        await supabase
+          .from('wallets')
+          .update({
+            available_balance: newAvail,
+            locked_balance: newLock,
+            updated_at: now,
+          })
+          .eq('id', userWallet.id);
+
+        await supabase
+          .from('bookings')
+          .update({
+            practitioner_id: currentUser.id,
+            status: 'CONFIRMED',
+            updated_at: now,
+          })
+          .eq('id', bookingId);
+
+        await supabase.from('wallet_transactions').insert([newTx]);
       } catch (err) {
-        console.warn('Supabase RPC accept error, synced locally:', err);
+        console.error('Supabase live accept booking error:', err);
       }
     }
 
-    return true;
+    return {
+      success: true,
+      message: `Đã nhận ca khám ${targetBooking.booking_code}! Phí nền tảng đã được tạm giữ an toàn.`,
+    };
   };
 
-  // 5. Complete Booking & Deduct Commission (RPC complete_booking_and_deduct_commission)
+  // 5. Complete Booking & Deduct Commission (Quyết toán phí nền tảng trực tiếp vào Supabase)
   const handleCompleteBooking = async (
     bookingId: string,
     diag: string,
@@ -542,29 +663,51 @@ export default function Home() {
     const targetBooking = bookings.find((b) => b.id === bookingId);
     if (!targetBooking || !currentUser) return false;
 
+    const now = new Date().toISOString();
     const userWallet = wallets[currentUser.id];
+    const comm = Number(targetBooking.commission_amount || 0);
+
     if (userWallet) {
-      const newLock = Math.max(0, userWallet.locked_balance - targetBooking.commission_amount);
+      const newLock = Math.max(0, Number(userWallet.locked_balance || 0) - comm);
+      const updatedWallet: Wallet = {
+        ...userWallet,
+        locked_balance: newLock,
+        updated_at: now,
+      };
+
       setWallets((prev) => ({
         ...prev,
-        [currentUser.id]: {
-          ...userWallet,
-          locked_balance: newLock,
-          updated_at: new Date().toISOString(),
-        },
+        [currentUser.id]: updatedWallet,
       }));
 
+      const newTxId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : generateUUID();
       const newTx: WalletTransaction = {
-        id: `tx-${Date.now()}`,
+        id: newTxId,
         wallet_id: userWallet.id,
         booking_id: bookingId,
-        amount: targetBooking.commission_amount,
+        amount: comm,
         type: 'DEDUCT_COMMISSION',
         balance_after: userWallet.available_balance,
         description: `Quyết toán phí kết nối nền tảng đơn ${targetBooking.booking_code}`,
-        created_at: new Date().toISOString(),
+        created_at: now,
       };
       setTransactions((prev) => [newTx, ...prev]);
+
+      if (isSupabaseConfigured) {
+        try {
+          await supabase
+            .from('wallets')
+            .update({ locked_balance: newLock, updated_at: now })
+            .eq('id', userWallet.id);
+
+          await supabase.from('wallet_transactions').insert([newTx]);
+        } catch (wErr) {
+          console.error('Supabase complete wallet error:', wErr);
+        }
+      }
     }
 
     setBookings((prev) =>
@@ -576,35 +719,49 @@ export default function Home() {
               medical_diagnosis: diag,
               treatment_notes: treat,
               doctor_advice: adv,
-              updated_at: new Date().toISOString(),
+              updated_at: now,
             }
           : b
       )
     );
 
-    // Update completed count
     if (currentPractitioner) {
+      const newCompleted = Number(currentPractitioner.completed_jobs || 0) + 1;
       setPractitioners((prev) => ({
         ...prev,
         [currentUser.id]: {
           ...currentPractitioner,
-          completed_jobs: currentPractitioner.completed_jobs + 1,
+          completed_jobs: newCompleted,
+          updated_at: now,
         },
       }));
+
+      if (isSupabaseConfigured) {
+        try {
+          await supabase
+            .from('practitioner_profiles')
+            .update({ completed_jobs: newCompleted, updated_at: now })
+            .eq('user_id', currentUser.id);
+        } catch (pErr) {
+          console.error('Supabase completed_jobs error:', pErr);
+        }
+      }
     }
 
-    // Live RPC to Supabase
-    if (isLiveConnected) {
+    if (isSupabaseConfigured) {
       try {
-        await supabase.rpc('complete_booking_and_deduct_commission', {
-          p_booking_id: bookingId,
-          p_practitioner_id: currentUser.id,
-          p_diagnosis: diag,
-          p_treatment: treat,
-          p_advice: adv,
-        });
+        await supabase
+          .from('bookings')
+          .update({
+            status: 'COMPLETED',
+            medical_diagnosis: diag,
+            treatment_notes: treat,
+            doctor_advice: adv,
+            updated_at: now,
+          })
+          .eq('id', bookingId);
       } catch (err) {
-        console.warn('Supabase RPC complete error, synced locally:', err);
+        console.error('Supabase complete booking error:', err);
       }
     }
 
@@ -734,8 +891,9 @@ export default function Home() {
     };
   };
 
-  // 7. Check-in GPS
-  const handleCheckInGPS = (bookingId: string, lat: number, lng: number, distance: number) => {
+  // 7. Check-in GPS (Lưu Supabase tức thời)
+  const handleCheckInGPS = async (bookingId: string, lat: number, lng: number, distance: number) => {
+    const now = new Date().toISOString();
     setBookings((prev) =>
       prev.map((b) =>
         b.id === bookingId
@@ -744,85 +902,179 @@ export default function Home() {
               checkin_lat: lat,
               checkin_lng: lng,
               checkin_distance_meters: distance,
-              updated_at: new Date().toISOString(),
+              updated_at: now,
             }
           : b
       )
     );
 
-    if (isLiveConnected) {
-      supabase.from('bookings').update({
-        checkin_lat: lat,
-        checkin_lng: lng,
-        checkin_distance_meters: distance,
-      }).eq('id', bookingId);
+    if (isSupabaseConfigured) {
+      try {
+        await supabase
+          .from('bookings')
+          .update({
+            checkin_lat: lat,
+            checkin_lng: lng,
+            checkin_distance_meters: distance,
+            updated_at: now,
+          })
+          .eq('id', bookingId);
+      } catch (err) {
+        console.error('Supabase checkin error:', err);
+      }
     }
   };
 
-  // 8. Update status
-  const handleUpdateStatus = (bookingId: string, status: Booking['status']) => {
+  // 8. Update status (Lưu Supabase tức thời)
+  const handleUpdateStatus = async (bookingId: string, status: Booking['status']) => {
+    const now = new Date().toISOString();
     setBookings((prev) =>
-      prev.map((b) => (b.id === bookingId ? { ...b, status, updated_at: new Date().toISOString() } : b))
+      prev.map((b) => (b.id === bookingId ? { ...b, status, updated_at: now } : b))
     );
 
-    if (isLiveConnected) {
-      supabase.from('bookings').update({ status }).eq('id', bookingId);
+    if (isSupabaseConfigured) {
+      try {
+        await supabase
+          .from('bookings')
+          .update({ status, updated_at: now })
+          .eq('id', bookingId);
+      } catch (err) {
+        console.error('Supabase update status error:', err);
+      }
     }
   };
 
-  // 9. Submit review
-  const handleSubmitReview = (bookingId: string, rating: number, review: string) => {
+  // 9. Submit review (Lưu Supabase tức thời)
+  const handleSubmitReview = async (bookingId: string, rating: number, review: string) => {
+    const now = new Date().toISOString();
     setBookings((prev) =>
       prev.map((b) =>
         b.id === bookingId
-          ? { ...b, patient_rating: rating, patient_review: review, updated_at: new Date().toISOString() }
+          ? { ...b, patient_rating: rating, patient_review: review, updated_at: now }
           : b
       )
     );
 
-    if (isLiveConnected) {
-      supabase.from('bookings').update({ patient_rating: rating, patient_review: review }).eq('id', bookingId);
+    if (isSupabaseConfigured) {
+      try {
+        await supabase
+          .from('bookings')
+          .update({
+            patient_rating: rating,
+            patient_review: review,
+            updated_at: now,
+          })
+          .eq('id', bookingId);
+      } catch (err) {
+        console.error('Supabase review error:', err);
+      }
     }
   };
 
-  // 10. Deposit to wallet
-  const handleDepositWallet = (amount: number) => {
-    if (!currentUser) return;
-    const newWalletId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : '44444444-4444-4444-4444-' + Date.now().toString().slice(-12).padStart(12, '0');
-    const userWallet = wallets[currentUser.id] || {
-      id: newWalletId,
-      user_id: currentUser.id,
-      available_balance: 0,
-      locked_balance: 0,
-      updated_at: new Date().toISOString(),
+  // 10. Deposit to wallet (Tự động tạo ví nếu chưa có & Lưu Supabase Cloud tức thời)
+  const handleDepositWallet = async (amount: number, customUserId?: string) => {
+    const targetUserId = customUserId || currentUser?.id;
+    if (!targetUserId) return;
+
+    const now = new Date().toISOString();
+    let userWallet = wallets[targetUserId];
+
+    if (isSupabaseConfigured) {
+      try {
+        const { data: dbWallet } = await supabase
+          .from('wallets')
+          .select('*')
+          .eq('user_id', targetUserId)
+          .maybeSingle();
+
+        if (dbWallet) {
+          userWallet = dbWallet;
+        } else if (!userWallet) {
+          // Tự động tạo ví mới trên Supabase nếu database chưa có
+          const newWalletId =
+            typeof crypto !== 'undefined' && crypto.randomUUID
+              ? crypto.randomUUID()
+              : generateUUID();
+          const { data: createdW } = await supabase
+            .from('wallets')
+            .insert([
+              {
+                id: newWalletId,
+                user_id: targetUserId,
+                available_balance: 0,
+                locked_balance: 0,
+                updated_at: now,
+              },
+            ])
+            .select()
+            .maybeSingle();
+
+          if (createdW) {
+            userWallet = createdW;
+          }
+        }
+      } catch (wErr) {
+        console.warn('Supabase wallet fetch error:', wErr);
+      }
+    }
+
+    if (!userWallet) {
+      const newWalletId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : generateUUID();
+      userWallet = {
+        id: newWalletId,
+        user_id: targetUserId,
+        available_balance: 0,
+        locked_balance: 0,
+        updated_at: now,
+      };
+    }
+
+    const newBal = Number(userWallet.available_balance || 0) + amount;
+    const updatedWallet: Wallet = {
+      ...userWallet,
+      available_balance: newBal,
+      updated_at: now,
     };
 
-    const newBal = userWallet.available_balance + amount;
     setWallets((prev) => ({
       ...prev,
-      [currentUser.id]: {
-        ...userWallet,
-        available_balance: newBal,
-        updated_at: new Date().toISOString(),
-      },
+      [targetUserId]: updatedWallet,
     }));
 
-    const txId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : '66666666-6666-6666-6666-' + Date.now().toString().slice(-12).padStart(12, '0');
+    const txId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : generateUUID();
     const tx: WalletTransaction = {
       id: txId,
-      wallet_id: userWallet.id,
+      wallet_id: updatedWallet.id,
       booking_id: null,
       amount,
       type: 'DEPOSIT',
       balance_after: newBal,
-      description: `Nạp tiền vào Ví Tín Dụng qua VietQR VCB (+${amount / 1000}k)`,
-      created_at: new Date().toISOString(),
+      description: `Nạp tiền vào Ví Tín Dụng qua VietQR VCB (+${formatVND(amount)})`,
+      created_at: now,
     };
     setTransactions((prev) => [tx, ...prev]);
 
-    if (isLiveConnected) {
-      supabase.from('wallets').update({ available_balance: newBal }).eq('user_id', currentUser.id);
-      supabase.from('wallet_transactions').insert([tx]);
+    if (isSupabaseConfigured) {
+      try {
+        await supabase.from('wallets').upsert([
+          {
+            id: updatedWallet.id,
+            user_id: targetUserId,
+            available_balance: newBal,
+            locked_balance: updatedWallet.locked_balance || 0,
+            updated_at: now,
+          },
+        ]);
+        await supabase.from('wallet_transactions').insert([tx]);
+      } catch (err) {
+        console.error('Supabase deposit save exception:', err);
+      }
     }
   };
 
@@ -983,7 +1235,7 @@ export default function Home() {
     const newId =
       typeof crypto !== 'undefined' && crypto.randomUUID
         ? crypto.randomUUID()
-        : 'srv-' + Date.now();
+        : generateUUID();
     const now = new Date().toISOString();
     const newService: ServiceItem = {
       ...data,
@@ -1406,26 +1658,68 @@ export default function Home() {
     return { success: true, message: `Đã xóa tài khoản ${userName} thành công.` };
   };
 
-  // 15. Adjust Wallet by Admin
-  const handleAdjustWallet = (userId: string, amount: number) => {
-    const curWallet = wallets[userId] || {
-      id: `w-${Date.now()}`,
-      user_id: userId,
-      available_balance: 0,
-      locked_balance: 0,
-      updated_at: new Date().toISOString(),
+  // 15. Adjust Wallet by Admin (Tự động tạo ví nếu chưa có & Lưu Supabase)
+  const handleAdjustWallet = async (userId: string, amount: number) => {
+    const now = new Date().toISOString();
+    let userWallet = wallets[userId];
+
+    if (!userWallet) {
+      const newWalletId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : generateUUID();
+      userWallet = {
+        id: newWalletId,
+        user_id: userId,
+        available_balance: 0,
+        locked_balance: 0,
+        updated_at: now,
+      };
+    }
+
+    const newBal = Number(userWallet.available_balance || 0) + amount;
+    const updatedWallet: Wallet = {
+      ...userWallet,
+      available_balance: newBal,
+      updated_at: now,
     };
-    const newBal = curWallet.available_balance + amount;
+
     setWallets((prev) => ({
       ...prev,
-      [userId]: {
-        ...curWallet,
-        available_balance: newBal,
-      },
+      [userId]: updatedWallet,
     }));
 
-    if (isLiveConnected) {
-      supabase.from('wallets').update({ available_balance: newBal }).eq('user_id', userId);
+    const txId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : generateUUID();
+    const tx: WalletTransaction = {
+      id: txId,
+      wallet_id: updatedWallet.id,
+      booking_id: null,
+      amount: Math.abs(amount),
+      type: amount >= 0 ? 'DEPOSIT' : 'DEDUCT_COMMISSION',
+      balance_after: newBal,
+      description: `Admin điều chỉnh số dư ví (${amount >= 0 ? '+' : ''}${formatVND(amount)})`,
+      created_at: now,
+    };
+    setTransactions((prev) => [tx, ...prev]);
+
+    if (isSupabaseConfigured) {
+      try {
+        await supabase.from('wallets').upsert([
+          {
+            id: updatedWallet.id,
+            user_id: userId,
+            available_balance: newBal,
+            locked_balance: updatedWallet.locked_balance || 0,
+            updated_at: now,
+          },
+        ]);
+        await supabase.from('wallet_transactions').insert([tx]);
+      } catch (wErr) {
+        console.error('Supabase adjust wallet error:', wErr);
+      }
     }
   };
 

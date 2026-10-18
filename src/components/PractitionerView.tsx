@@ -52,7 +52,7 @@ interface PractitionerViewProps {
   transactions: WalletTransaction[];
   bookings: Booking[];
   profiles: Profile[];
-  onAcceptBooking: (bookingId: string) => Promise<boolean>;
+  onAcceptBooking: (bookingId: string) => Promise<{ success: boolean; message?: string } | boolean>;
   onCheckInGPS: (bookingId: string, lat: number, lng: number, distance: number) => void;
   onUpdateStatus: (bookingId: string, status: Booking['status']) => void;
   onCompleteBooking: (
@@ -65,7 +65,7 @@ interface PractitionerViewProps {
     bookingId: string,
     reason?: string
   ) => Promise<{ success: boolean; message?: string } | boolean | void> | void;
-  onDepositWallet: (amount: number) => void;
+  onDepositWallet: (amount: number) => Promise<void> | void;
   onToggleOnline: (isOnline: boolean) => void;
   onLogout?: () => void;
 }
@@ -788,14 +788,14 @@ export default function PractitionerView({
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => onDepositWallet(200000)}
+                onClick={async () => { await onDepositWallet(200000); setActionSuccess("Đã nạp 200.000 đ vào Ví Tín Dụng thành công!"); }}
                 className="px-3 py-1.5 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-800 font-bold border border-teal-200"
               >
                 +200.000đ
               </button>
               <button
                 type="button"
-                onClick={() => onDepositWallet(500000)}
+                onClick={async () => { await onDepositWallet(500000); setActionSuccess("Đã nạp 500.000 đ vào Ví Tín Dụng thành công!"); }}
                 className="px-3 py-1.5 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-800 font-bold border border-teal-200"
               >
                 +500.000đ
@@ -944,10 +944,10 @@ export default function PractitionerView({
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  onDepositWallet(depositAmount);
+                onClick={async () => {
+                  await onDepositWallet(depositAmount);
                   setShowQRModal(false);
-                  setActionSuccess(`Nạp thành công ${formatVND(depositAmount)} vào Ví Tín Dụng!`);
+                  setActionSuccess(`Nạp thành công ${formatVND(depositAmount)} vào Ví Tín Dụng qua VietQR!`);
                 }}
                 className="w-full py-3 rounded-2xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs shadow-md"
               >
