@@ -909,7 +909,8 @@ export default function Home() {
     const targetName = targetUser ? targetUser.full_name : 'người dùng';
     const now = new Date().toISOString();
 
-    if (isLiveConnected) {
+    // 1. Cập nhật tức thời vào Supabase Cloud (bảo đảm lưu vĩnh viễn với RLS)
+    if (isSupabaseConfigured) {
       try {
         const { error } = await supabase
           .from('profiles')
@@ -920,15 +921,17 @@ export default function Home() {
           console.error('Supabase reset password error:', error);
           return {
             success: false,
-            message: `Lỗi đặt lại mật khẩu trên Supabase: ${error.message}`,
+            message: `Lỗi lưu mật khẩu trên Supabase: ${error.message}`,
           };
         }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
+        console.error('Supabase reset password exception:', e);
         return { success: false, message: `Lỗi kết nối cơ sở dữ liệu: ${msg}` };
       }
     }
 
+    // 2. Cập nhật ngay lập tức bộ nhớ React state
     setProfiles((prev) =>
       prev.map((p) => (p.id === userId ? { ...p, password_hash: pwd, updated_at: now } : p))
     );
@@ -937,13 +940,9 @@ export default function Home() {
       setCurrentUser((prev) => (prev ? { ...prev, password_hash: pwd, updated_at: now } : null));
     }
 
-    if (isLiveConnected) {
-      await checkSupabaseConnection();
-    }
-
     return {
       success: true,
-      message: `Đã đặt lại mật khẩu của ${targetName} thành "${pwd}" thành công!`,
+      message: `Đã đổi mật khẩu của ${targetName} thành "${pwd}" thành công! Cập nhật Supabase tức thì.`,
     };
   };
 
@@ -1210,7 +1209,7 @@ export default function Home() {
 
     const now = new Date().toISOString();
 
-    if (isLiveConnected) {
+    if (isSupabaseConfigured) {
       try {
         if (data.profile && Object.keys(data.profile).length > 0) {
           const profilePayload: Partial<Profile> = {

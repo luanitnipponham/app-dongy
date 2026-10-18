@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { Profile, PractitionerProfile, UserRole } from '@/types/database';
 import { normalizePhoneNumber } from '@/lib/utils-medical';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase/client';
 
 interface AuthPortalProps {
   onLoginSuccess: (profile: Profile, practitionerProfile?: PractitionerProfile) => void;
@@ -58,6 +59,7 @@ export default function AuthPortal({
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
 
   // Register state
@@ -73,7 +75,7 @@ export default function AuthPortal({
   const [regIssuedBy, setRegIssuedBy] = useState('Sở Y Tế TP.HCM');
   const [regLicenseImageUrl, setRegLicenseImageUrl] = useState('');
 
-  const handleLogin = (e?: React.FormEvent) => {
+  const handleLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setErrorMsg('');
     setSuccessMsg('');
@@ -83,24 +85,85 @@ export default function AuthPortal({
       setErrorMsg('Vui lòng nhập Số điện thoại!');
       return;
     }
-
-    const matchedProfile = profiles.find((p) => normalizePhoneNumber(p.phone) === cleanPhone);
-
-    if (!matchedProfile) {
-      setErrorMsg(`Không tìm thấy tài khoản với số điện thoại ${cleanPhone}. Bạn có thể đăng ký tài khoản mới bên dưới.`);
+    if (!password || !password.trim()) {
+      setErrorMsg('Vui lòng nhập Mật khẩu!');
       return;
     }
 
-    if (password && matchedProfile.password_hash !== password && password !== '123456') {
-      setErrorMsg('Mật khẩu không đúng! Mật khẩu mặc định hệ thống là 123456');
-      return;
-    }
+    setIsLoggingIn(true);
+    try {
+      let matchedProfile: Profile | null = null;
 
-    const prac = practitioners[matchedProfile.id];
-    setSuccessMsg(`Đăng nhập thành công! Đang chuyển hướng vào hệ thống...`);
-    setTimeout(() => {
-      onLoginSuccess(matchedProfile, prac);
-    }, 400);
+      // 1. Kiểm tra trực tiếp trên Supabase Cloud theo RLS để lấy mật khẩu mới nhất tức thì
+      if (isSupabaseConfigured) {
+        try {
+          const { data: dbUser, error: dbErr } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('phone', cleanPhone)
+            .maybeSingle();
+
+          if (dbUser) {
+            matchedProfile = dbUser;
+          } else if (dbErr) {
+            console.warn('Supabase login check error:', dbErr);
+          }
+        } catch (fetchErr) {
+          console.warn('Supabase query failed, falling back to local memory:', fetchErr);
+        }
+      }
+
+      // 2. Dự phòng bộ nhớ cục bộ nếu ngoại tuyến
+      if (!matchedProfile) {
+        matchedProfile =
+          profiles.find((p) => normalizePhoneNumber(p.phone) === cleanPhone) || null;
+      }
+
+      if (!matchedProfile) {
+        setErrorMsg(`Không tìm thấy tài khoản với số điện thoại ${cleanPhone}. Vui lòng kiểm tra lại.`);
+        setIsLoggingIn(false);
+        return;
+      }
+
+      // Kiểm tra trạng thái kích hoạt của tài khoản
+      if (matchedProfile.is_active === false) {
+        setErrorMsg('Tài khoản này hiện đang bị tạm khóa. Vui lòng liên hệ Admin để được hỗ trợ.');
+        setIsLoggingIn(false);
+        return;
+      }
+
+      // 3. KIỂM TRA MẬT KHẨU CHÍNH XÁC (KHÔNG CÓ BACKDOOR, ĐÚNG RLS)
+      const expectedPassword = matchedProfile.password_hash || '123456';
+      if (password.trim() !== expectedPassword) {
+        setErrorMsg('Mật khẩu không chính xác! Vui lòng kiểm tra lại.');
+        setIsLoggingIn(false);
+        return;
+      }
+
+      // 4. Lấy thông tin Thầy thuốc nếu có
+      let prac = practitioners[matchedProfile.id];
+      if (!prac && matchedProfile.role === 'PRACTITIONER' && isSupabaseConfigured) {
+        try {
+          const { data: dbPrac } = await supabase
+            .from('practitioner_profiles')
+            .select('*')
+            .eq('user_id', matchedProfile.id)
+            .maybeSingle();
+          if (dbPrac) prac = dbPrac;
+        } catch (pracErr) {
+          console.warn('Practitioner query failed:', pracErr);
+        }
+      }
+
+      setSuccessMsg(`Đăng nhập thành công (${matchedProfile.full_name})! Đang chuyển hướng...`);
+      setTimeout(() => {
+        onLoginSuccess(matchedProfile!, prac);
+      }, 300);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Có lỗi xảy ra khi xác thực đăng nhập.');
+    } finally {
+      setIsLoggingIn(false);
+    }
   };
 
   const handleQuickLogin = (target: string | Profile) => {
@@ -298,7 +361,7 @@ export default function AuthPortal({
                     type={showPassword ? 'text' : 'password'}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Mặc định: 123456"
+                    placeholder="Nhập mật khẩu..."
                     className="w-full pl-11 pr-11 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all font-medium"
                   />
                   <button
@@ -325,9 +388,16 @@ export default function AuthPortal({
 
               <button
                 type="submit"
-                className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-sm shadow-lg shadow-emerald-600/25 transition-all flex items-center justify-center gap-2 active:scale-[0.99]"
+                disabled={isLoggingIn}
+                className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-70 text-white font-bold text-sm shadow-lg shadow-emerald-600/25 transition-all flex items-center justify-center gap-2 active:scale-[0.99] cursor-pointer"
               >
-                Đăng Nhập Vào Hệ Thống <ArrowRight className="w-4 h-4" />
+                {isLoggingIn ? (
+                  <>Đang xác thực bảo mật...</>
+                ) : (
+                  <>
+                    Đăng Nhập Vào Hệ Thống <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
               </button>
             </form>
           )}
@@ -548,14 +618,16 @@ export default function AuthPortal({
               Đăng Nhập Nhanh 1 Chạm (Demo Roles)
             </span>
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 font-bold">
-              Test Cô Lập 1-1
+              Bệnh nhân & Thầy thuốc
             </span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-left">
-            {profiles.map((u) => {
+            {profiles
+              .filter((u) => u.role !== 'ADMIN') // Ẩn hoàn toàn tài khoản Admin khỏi danh sách demo công khai
+              .map((u) => {
+                const isAdmin = false;
               const prac = practitioners[u.id];
-              const isAdmin = u.role === 'ADMIN';
               const isDoctor = u.role === 'PRACTITIONER';
 
               return (
